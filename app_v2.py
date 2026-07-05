@@ -1,0 +1,1521 @@
+from __future__ import annotations
+
+import gc
+import html
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import threading
+import traceback
+from array import array
+from pathlib import Path
+
+from PySide6.QtCore import QEvent, QObject, QPointF, QThread, QTimer, Qt, QUrl, Signal
+from PySide6.QtGui import (
+    QBrush, QColor, QFont, QIcon, QKeySequence, QLinearGradient, QPainter,
+    QPen, QPixmap, QPolygonF, QShortcut,
+)
+from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
+from PySide6.QtWidgets import (
+    QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel,
+    QFontComboBox, QGraphicsItem, QGraphicsScene, QGraphicsTextItem, QGraphicsView,
+    QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
+    QScrollBar, QSizePolicy, QSlider, QSpinBox, QSplitter, QStyledItemDelegate,
+    QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
+)
+
+
+APP_NAME = "Din Subtitler"
+ROOT = Path(__file__).resolve().parent
+MODELS_DIR = ROOT / "models"
+BIN_DIR = ROOT / "bin"
+CRASH_LOG = ROOT / "crash.log"
+VIDEO_TYPES = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".mpeg", ".mpg", ".wmv"}
+os.environ["PATH"] = str(BIN_DIR) + os.pathsep + os.environ.get("PATH", "")
+_DLL_HANDLES = []
+if os.name == "nt":
+    # As bibliotecas CUDA (cuBLAS/cuDNN) vêm dos pacotes pip da NVIDIA dentro do venv.
+    for pkg in ("cublas", "cudnn"):
+        dll_dir = Path(sys.prefix) / "Lib" / "site-packages" / "nvidia" / pkg / "bin"
+        if dll_dir.exists():
+            os.environ["PATH"] = str(dll_dir) + os.pathsep + os.environ["PATH"]
+            _DLL_HANDLES.append(os.add_dll_directory(str(dll_dir)))
+
+
+def _log_uncaught(exc_type, exc_value, exc_tb):
+    text = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+    sys.stderr.write(text)
+    try:
+        with CRASH_LOG.open("a", encoding="utf-8") as f:
+            f.write(text + "\n")
+    except Exception:
+        pass
+
+
+sys.excepthook = _log_uncaught
+
+
+def srt_time(seconds: float) -> str:
+    ms = max(0, round(seconds * 1000))
+    h, ms = divmod(ms, 3_600_000)
+    m, ms = divmod(ms, 60_000)
+    s, ms = divmod(ms, 1000)
+    return f"{h:02}:{m:02}:{s:02},{ms:03}"
+
+
+def clock(ms: int) -> str:
+    sec = max(0, ms // 1000)
+    return f"{sec // 60:02}:{sec % 60:02}"
+
+
+def clean(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def clean_lines(text: str) -> str:
+    lines = [re.sub(r"[ \t]+", " ", ln).strip() for ln in text.split("\n")]
+    return "\n".join(ln for ln in lines if ln)
+
+
+def editor_time(seconds: float) -> str:
+    return srt_time(seconds).replace(",", ".")
+
+
+def wrap_caption(text: str, limit: int = 42) -> str:
+    text = clean_lines(text)
+    if "\n" in text:
+        return text
+    if len(text) <= limit:
+        return text
+    words = text.split()
+    if len(words) < 2:
+        return text
+    best = None
+    for i in range(1, len(words)):
+        a, b = " ".join(words[:i]), " ".join(words[i:])
+        fits = len(a) <= limit and len(b) <= limit
+        marker = words[i - 1].rstrip("\"'”)")
+        bonus = -8 if marker.endswith((",", ";", ":", ".", "!", "?", "…", "—")) else 0
+        score = (0 if fits else 1, abs(len(a) - len(b)) + bonus)
+        if best is None or score < best[0]:
+            best = (score, a, b)
+    return f"{best[1]}\n{best[2]}"
+
+
+CAPTION_MAX_CHARS = 80
+CAPTION_MIN_CHARS = 12
+CAPTION_PAUSE_SECONDS = 0.45
+
+
+def split_words_into_captions(words, max_chars: int = CAPTION_MAX_CHARS) -> list[dict]:
+    captions = []
+    start = 0
+    length = 0
+    comma_at = None
+    comma_length = 0
+
+    def flush(end):
+        nonlocal start
+        chunk = words[start:end]
+        text = clean("".join(w.word for w in chunk))
+        if text:
+            captions.append({"start": float(chunk[0].start), "end": float(chunk[-1].end), "text": text})
+        start = end
+
+    for i, w in enumerate(words):
+        length += len(w.word)
+        is_last = i == len(words) - 1
+        stripped = w.word.strip()
+        if stripped.endswith((",", ";", ":")):
+            comma_at, comma_length = i, length
+        ends_sentence = stripped.endswith((".", "!", "?", "…"))
+        gap = words[i + 1].start - w.end if not is_last else 0.0
+        if is_last or ends_sentence:
+            flush(i + 1)
+            comma_at, comma_length, length = None, 0, 0
+        elif gap >= CAPTION_PAUSE_SECONDS and length >= CAPTION_MIN_CHARS:
+            flush(i + 1)
+            comma_at, comma_length, length = None, 0, 0
+        elif length >= max_chars:
+            if comma_at is not None:
+                flush(comma_at + 1)
+                length -= comma_length
+            else:
+                flush(i + 1)
+                length = 0
+            comma_at, comma_length = None, 0
+    return captions
+
+
+EN_CAPTION_MAX_CHARS = 84
+
+
+def write_srt(path: Path, captions: list[dict]) -> None:
+    with path.open("w", encoding="utf-8-sig", newline="\n") as f:
+        for i, c in enumerate(captions, 1):
+            f.write(f"{i}\n{srt_time(c['start'])} --> {srt_time(c['end'])}\n")
+            f.write(f"{wrap_caption(c['text'])}\n\n")
+
+
+class Engine:
+    def __init__(self, progress):
+        self.progress = progress
+
+    def emit(self, text, value):
+        self.progress(text, value)
+
+    def ensure_tools(self):
+        if not shutil.which("ffmpeg"):
+            raise RuntimeError("FFmpeg não foi encontrado.")
+
+    def _run_whisper(self, video: Path, task: str, label: str, max_chars: int) -> list[dict]:
+        self.ensure_tools()
+        with tempfile.TemporaryDirectory(prefix="din-subtitler-") as td:
+            audio = Path(td) / "audio.wav"
+            self.emit("Extraindo áudio…", 8)
+            result = subprocess.run(
+                ["ffmpeg", "-y", "-i", str(video), "-vn", "-ac", "1", "-ar", "16000",
+                 "-c:a", "pcm_s16le", str(audio)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            )
+            if result.returncode:
+                raise RuntimeError("Não consegui extrair o áudio desse vídeo.")
+            from faster_whisper import WhisperModel
+
+            def run(device, compute):
+                model = WhisperModel(str(MODELS_DIR / "whisper"), device=device, compute_type=compute)
+                segs, info = model.transcribe(
+                    str(audio), language="pt", task=task, vad_filter=True,
+                    beam_size=5, condition_on_previous_text=True, word_timestamps=True,
+                )
+                total = max(info.duration, 0.001)
+                captions = []
+                for s in segs:
+                    if s.words:
+                        captions.extend(split_words_into_captions(s.words, max_chars=max_chars))
+                    else:
+                        text = clean(s.text)
+                        if text:
+                            captions.append({"start": float(s.start), "end": float(s.end), "text": text})
+                    pct = 20 + round(min(1.0, s.end / total) * 78)
+                    self.emit(f"{label}… {int(s.end)}s / {int(total)}s", pct)
+                del model
+                gc.collect()
+                return captions
+
+            try:
+                self.emit(f"{label} com a GPU…", 20)
+                captions = run("cuda", "float16")
+            except Exception:
+                self.emit(f"{label} pela CPU…", 20)
+                captions = run("cpu", "int8")
+        if not captions:
+            raise RuntimeError("Não encontrei fala em português.")
+        self.emit(f"{len(captions)} trechos gerados.", 100)
+        return captions
+
+    def transcribe(self, video: Path) -> list[dict]:
+        return self._run_whisper(
+            video, "transcribe", "Transcrevendo em português", CAPTION_MAX_CHARS
+        )
+
+    def translate(self, video: Path) -> list[dict]:
+        return self._run_whisper(
+            video, "translate", "Traduzindo para inglês", EN_CAPTION_MAX_CHARS
+        )
+
+
+class Job(QObject):
+    progress = Signal(str, int)
+    finished = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, fn):
+        super().__init__()
+        self.fn = fn
+
+    def run(self):
+        try:
+            self.finished.emit(self.fn(lambda t, p: self.progress.emit(t, p)))
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
+class SubtitleOverlay(QGraphicsTextItem):
+    moved = Signal()
+    textEdited = Signal(str)
+    editingFinished = Signal()
+
+    def __init__(self):
+        super().__init__()
+        self.setDefaultTextColor(Qt.GlobalColor.white)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
+        self.setZValue(10)
+        self.setCursor(Qt.CursorShape.SizeAllCursor)
+        self.editing = False
+        self.document().contentsChanged.connect(self._on_contents_changed)
+
+    def itemChange(self, change, value):
+        result = super().itemChange(change, value)
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
+            self.moved.emit()
+        return result
+
+    def mouseDoubleClickEvent(self, event):
+        if not self.editing:
+            self.start_editing()
+        super().mouseDoubleClickEvent(event)
+
+    def start_editing(self):
+        self.editing = True
+        self._original_text = self.toPlainText()
+        self.setTextInteractionFlags(Qt.TextInteractionFlag.TextEditorInteraction)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
+        self.setCursor(Qt.CursorShape.IBeamCursor)
+        self.setFocus(Qt.FocusReason.MouseFocusReason)
+
+    def stop_editing(self):
+        if not self.editing:
+            return
+        self.editing = False
+        self.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
+        self.setCursor(Qt.CursorShape.SizeAllCursor)
+        self.editingFinished.emit()
+
+    def focusOutEvent(self, event):
+        super().focusOutEvent(event)
+        self.stop_editing()
+
+    def keyPressEvent(self, event):
+        if self.editing:
+            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                    super().keyPressEvent(event)  # Shift+Enter: quebra de linha
+                    return
+                self.clearFocus()
+                event.accept()
+                return
+            if event.key() == Qt.Key.Key_Escape:
+                self.setPlainText(self._original_text)
+                self.clearFocus()
+                event.accept()
+                return
+        super().keyPressEvent(event)
+
+    def _on_contents_changed(self):
+        if self.editing:
+            self.textEdited.emit(self.toPlainText())
+
+
+class VideoDropView(QGraphicsView):
+    videoDropped = Signal(str)
+
+    def __init__(self, scene):
+        super().__init__(scene)
+        self.setAcceptDrops(True)
+        self.viewport().setAcceptDrops(True)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        urls = event.mimeData().urls()
+        if urls:
+            self.videoDropped.emit(urls[0].toLocalFile())
+            event.acceptProposedAction()
+        else:
+            super().dropEvent(event)
+
+
+class WaveformWidget(QWidget):
+    seekRequested = Signal(int)
+    segmentChanged = Signal(int)
+    segmentSelected = Signal(int)
+    viewChanged = Signal()
+
+    def __init__(self):
+        super().__init__()
+        self.setMinimumHeight(105)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setMouseTracking(True)
+        self.peaks: list[float] = []
+        self.peak_norm = 1.0
+        self.duration = 1.0
+        self.position = 0.0
+        self.captions: list[dict] = []
+        self.view_start = 0.0
+        self.zoom = 1.0
+        self.drag_mode = None
+        self.drag_index = -1
+        self.drag_origin = 0.0
+        self.original = None
+        self.setToolTip(
+            "Rodinha: zoom  •  Alt + rodinha: navegar  •  "
+            "Arraste blocos e bordas para ajustar tempos"
+        )
+
+    def set_waveform(self, peaks: list[float], duration: float):
+        self.peaks = peaks
+        self.peak_norm = max(max(peaks, default=0.0), 0.05)
+        self.duration = max(.1, duration)
+        self.view_start = 0.0
+        self.zoom = 1.0
+        self.viewChanged.emit()
+        self.update()
+
+    def set_view_start(self, seconds: float):
+        self.view_start = max(0.0, min(seconds, self.duration - self.visible_duration()))
+        self.update()
+
+    def set_captions(self, captions: list[dict]):
+        self.captions = captions
+        self.update()
+
+    def set_position(self, seconds: float):
+        self.position = seconds
+        self.update()
+
+    def visible_duration(self):
+        return self.duration / self.zoom
+
+    def x_to_time(self, x):
+        return self.view_start + max(0, min(self.width(), x)) / max(1, self.width()) * self.visible_duration()
+
+    def time_to_x(self, seconds):
+        return (seconds - self.view_start) / self.visible_duration() * self.width()
+
+    def wheelEvent(self, event):
+        delta = event.angleDelta()
+        steps = (delta.y() or delta.x()) / 120
+        if event.modifiers() & Qt.KeyboardModifier.AltModifier:
+            span = self.visible_duration()
+            self.view_start -= steps * span * .12
+        else:
+            anchor = self.x_to_time(event.position().x())
+            self.zoom = max(1.0, min(80.0, self.zoom * (1.25 ** steps)))
+            fraction = event.position().x() / max(1, self.width())
+            self.view_start = anchor - fraction * self.visible_duration()
+        self.view_start = max(0.0, min(self.view_start, self.duration - self.visible_duration()))
+        self.viewChanged.emit()
+        self.update()
+        event.accept()
+
+    BLOCK_STRIP = 44  # altura da faixa de blocos, sobreposta à parte de baixo da onda
+
+    def block_top_px(self):
+        return self.height() - self.BLOCK_STRIP
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.fillRect(self.rect(), QColor("#0a0e15"))
+        center = self.height() // 2
+        if self.peaks:
+            first = int(self.view_start / self.duration * len(self.peaks))
+            last_time = self.view_start + self.visible_duration()
+            last = min(len(self.peaks), int(last_time / self.duration * len(self.peaks)) + 1)
+            p.setPen(QPen(QColor("#64748f"), 1))
+            for x in range(self.width()):
+                ratio = x / max(1, self.width() - 1)
+                idx = first + int(ratio * max(0, last - first - 1))
+                if 0 <= idx < len(self.peaks):
+                    amp = min(1.0, self.peaks[idx] / self.peak_norm) * (self.height() * .46)
+                    p.drawLine(x, int(center - amp), x, int(center + amp))
+        p.setPen(QPen(QColor("#30394a"), 1))
+        span = self.visible_duration()
+        interval = 1 if span < 20 else 5 if span < 90 else 10 if span < 240 else 30
+        first_tick = int(self.view_start / interval) * interval
+        tick = first_tick
+        while tick <= self.view_start + span:
+            x = self.time_to_x(tick)
+            p.drawLine(int(x), 0, int(x), self.height())
+            p.setPen(QColor("#8993a8"))
+            p.drawText(int(x + 3), 13, f"{int(tick)//60}:{int(tick)%60:02}")
+            p.setPen(QPen(QColor("#30394a"), 1))
+            tick += interval
+        block_top = self.block_top_px() + 5
+        block_height = self.height() - block_top - 5
+        for i, c in enumerate(self.captions):
+            x1, x2 = self.time_to_x(c["start"]), self.time_to_x(c["end"])
+            if x2 < 0 or x1 > self.width():
+                continue
+            color = QColor(255, 66, 109, 225) if i == self.drag_index else QColor(147, 64, 91, 205)
+            p.setBrush(QBrush(color))
+            p.setPen(QPen(QColor("#ff87a1"), 1))
+            p.drawRoundedRect(int(x1), block_top, max(3, int(x2 - x1)), block_height, 3, 3)
+            if x2 - x1 > 18:
+                p.setPen(Qt.GlobalColor.white)
+                font = p.font()
+                font.setPointSize(8)
+                p.setFont(font)
+                available = max(0, int(x2 - x1) - 8)
+                elided = p.fontMetrics().elidedText(
+                    c["text"].replace("\n", " "), Qt.TextElideMode.ElideRight, available
+                )
+                p.drawText(int(x1 + 4), block_top + block_height - 7, elided)
+        play_x = self.time_to_x(self.position)
+        if 0 <= play_x <= self.width():
+            p.setPen(QPen(QColor("#ffd166"), 2))
+            p.drawLine(int(play_x), 0, int(play_x), self.height())
+        p.end()
+
+    BOUNDARY_PX = 3
+    EDGE_PX = 7
+    MIN_GAP = 0.05
+
+    def hit_segment(self, x, y):
+        if y < self.block_top_px():
+            return -1, None
+        for i in range(len(self.captions) - 1):
+            a, b = self.captions[i], self.captions[i + 1]
+            if abs(a["end"] - b["start"]) < 1e-3:
+                bx = self.time_to_x(a["end"])
+                if abs(x - bx) <= self.BOUNDARY_PX:
+                    return i, "boundary"
+        for i, c in enumerate(self.captions):
+            x1, x2 = self.time_to_x(c["start"]), self.time_to_x(c["end"])
+            if x1 - self.EDGE_PX <= x <= x2 + self.EDGE_PX:
+                if abs(x - x1) <= self.EDGE_PX:
+                    return i, "start"
+                if abs(x - x2) <= self.EDGE_PX:
+                    return i, "end"
+                if x1 < x < x2:
+                    return i, "move"
+        return -1, None
+
+    def neighbor_bounds(self, index):
+        lower = self.captions[index - 1]["end"] if index > 0 else 0.0
+        upper = self.captions[index + 1]["start"] if index < len(self.captions) - 1 else self.duration
+        return lower, upper
+
+    def mousePressEvent(self, event):
+        time_at_mouse = self.x_to_time(event.position().x())
+        index, mode = self.hit_segment(event.position().x(), event.position().y())
+        if index >= 0:
+            self.drag_index, self.drag_mode = index, mode
+            self.drag_origin = time_at_mouse
+            c = self.captions[index]
+            self.original = (c["start"], c["end"])
+            self.segmentSelected.emit(index)
+            seek_time = c["end"] if mode == "boundary" else c["start"]
+            self.seekRequested.emit(round(seek_time * 1000))
+        else:
+            self.drag_mode = "playhead"
+            self.position = time_at_mouse
+            self.seekRequested.emit(round(time_at_mouse * 1000))
+        self.update()
+
+    CURSOR_BY_MODE = {
+        "boundary": Qt.CursorShape.SplitHCursor,
+        "start": Qt.CursorShape.SizeHorCursor,
+        "end": Qt.CursorShape.SizeHorCursor,
+        "move": Qt.CursorShape.SizeAllCursor,
+    }
+
+    def mouseMoveEvent(self, event):
+        if self.drag_mode is None:
+            _index, mode = self.hit_segment(event.position().x(), event.position().y())
+            self.setCursor(self.CURSOR_BY_MODE.get(mode, Qt.CursorShape.ArrowCursor))
+            return
+        now = self.x_to_time(event.position().x())
+        if self.drag_mode == "playhead":
+            self.position = now
+            self.seekRequested.emit(round(now * 1000))
+        elif self.drag_mode == "boundary":
+            i = self.drag_index
+            a, b = self.captions[i], self.captions[i + 1]
+            lower, upper = a["start"] + self.MIN_GAP, b["end"] - self.MIN_GAP
+            t = max(lower, min(now, upper))
+            a["end"] = t
+            b["start"] = t
+            self.segmentChanged.emit(i)
+            self.segmentChanged.emit(i + 1)
+        elif self.drag_index >= 0:
+            c = self.captions[self.drag_index]
+            lower_bound, upper_bound = self.neighbor_bounds(self.drag_index)
+            if self.drag_mode == "start":
+                c["start"] = max(lower_bound, min(now, c["end"] - self.MIN_GAP))
+            elif self.drag_mode == "end":
+                c["end"] = min(upper_bound, max(now, c["start"] + self.MIN_GAP))
+            else:
+                start, end = self.original
+                delta, length = now - self.drag_origin, end - start
+                new_start = max(lower_bound, min(start + delta, upper_bound - length))
+                c["start"], c["end"] = new_start, new_start + length
+            self.segmentChanged.emit(self.drag_index)
+        self.update()
+
+    def mouseReleaseEvent(self, _event):
+        self.drag_mode = None
+        self.original = None
+        self.update()
+
+
+class WaveformPanel(QWidget):
+    seekRequested = Signal(int)
+    segmentChanged = Signal(int)
+    segmentSelected = Signal(int)
+
+    def __init__(self):
+        super().__init__()
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+        self.waveform = WaveformWidget()
+        self.scrollbar = QScrollBar(Qt.Orientation.Horizontal)
+        self.scrollbar.setEnabled(False)
+        layout.addWidget(self.waveform, 1)
+        layout.addWidget(self.scrollbar)
+        self._updating = False
+        self.waveform.seekRequested.connect(self.seekRequested)
+        self.waveform.segmentChanged.connect(self.segmentChanged)
+        self.waveform.segmentSelected.connect(self.segmentSelected)
+        self.waveform.viewChanged.connect(self.sync_scrollbar)
+        self.scrollbar.valueChanged.connect(self.on_scrollbar)
+
+    def set_waveform(self, peaks: list[float], duration: float):
+        self.waveform.set_waveform(peaks, duration)
+
+    def set_captions(self, captions: list[dict]):
+        self.waveform.set_captions(captions)
+
+    def set_position(self, seconds: float):
+        self.waveform.set_position(seconds)
+
+    def sync_scrollbar(self):
+        span = self.waveform.visible_duration()
+        max_start = max(0.0, self.waveform.duration - span)
+        self._updating = True
+        self.scrollbar.setEnabled(max_start > 0.01)
+        self.scrollbar.setRange(0, round(max_start * 1000))
+        self.scrollbar.setPageStep(round(span * 1000))
+        self.scrollbar.setSingleStep(max(1, round(span * 100)))
+        self.scrollbar.setValue(round(self.waveform.view_start * 1000))
+        self._updating = False
+
+    def on_scrollbar(self, value):
+        if self._updating:
+            return
+        self.waveform.set_view_start(value / 1000)
+
+
+class CaptionTextEdit(QPlainTextEdit):
+    commitRequested = Signal()
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                super().keyPressEvent(event)  # Shift+Enter: quebra de linha
+            else:
+                self.commitRequested.emit()
+            return
+        super().keyPressEvent(event)
+
+
+class CaptionDelegate(QStyledItemDelegate):
+    liveText = Signal(int, str)
+
+    def createEditor(self, parent, option, index):
+        editor = CaptionTextEdit(parent)
+        editor.setFrameShape(QFrame.Shape.NoFrame)
+        editor.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        editor.commitRequested.connect(
+            lambda: (
+                self.commitData.emit(editor),
+                self.closeEditor.emit(editor, QStyledItemDelegate.EndEditHint.NoHint),
+            )
+        )
+        editor.textChanged.connect(
+            lambda row=index.row(): self.liveText.emit(row, editor.toPlainText())
+        )
+        return editor
+
+    def setEditorData(self, editor, index):
+        editor.setPlainText(index.data() or "")
+        cursor = editor.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        editor.setTextCursor(cursor)
+
+    def setModelData(self, editor, model, index):
+        model.setData(index, clean_lines(editor.toPlainText()))
+
+    def updateEditorGeometry(self, editor, option, index):
+        rect = option.rect
+        rect.setHeight(max(rect.height(), 64))
+        editor.setGeometry(rect)
+
+
+class SubtitleEditor(QWidget):
+    seek = Signal(int)
+    changed = Signal()
+
+    def __init__(self, language: str):
+        super().__init__()
+        self.language = language
+        self.captions: list[dict] = []
+        self.loading = False
+        self.following = False
+        root = QVBoxLayout(self)
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(["#", "Início", "Fim", "Texto"])
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setColumnWidth(0, 45)
+        self.table.setColumnWidth(1, 115)
+        self.table.setColumnWidth(2, 115)
+        self.table.setMinimumHeight(140)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setEditTriggers(
+            QTableWidget.EditTrigger.DoubleClicked
+            | QTableWidget.EditTrigger.EditKeyPressed
+            | QTableWidget.EditTrigger.SelectedClicked
+        )
+        self.caption_delegate = CaptionDelegate(self)
+        self.table.setItemDelegateForColumn(3, self.caption_delegate)
+        self.caption_delegate.liveText.connect(self.on_live_text)
+        root.addWidget(self.table, 1)
+        self.table.itemSelectionChanged.connect(self.on_selection)
+        self.table.itemChanged.connect(self.on_item_changed)
+
+    def set_captions(self, captions: list[dict]):
+        self.captions = [dict(x) for x in captions]
+        self.refresh()
+
+    def commit_text(self):
+        row = self.table.currentRow()
+        editor = QApplication.focusWidget()
+        if (
+            row >= 0 and row < len(self.captions)
+            and isinstance(editor, QPlainTextEdit)
+            and self.table.isAncestorOf(editor)
+        ):
+            text = clean_lines(editor.toPlainText())
+            self.captions[row]["text"] = text
+            self.loading = True
+            self.table.item(row, 3).setText(text)
+            self.loading = False
+            self.table.resizeRowToContents(row)
+
+    def refresh(self, select=0):
+        self.loading = True
+        self.table.setRowCount(len(self.captions))
+        for r, c in enumerate(self.captions):
+            values = [str(r + 1), editor_time(c["start"]), editor_time(c["end"]), c["text"]]
+            for col, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                if col < 3:
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self.table.setItem(r, col, item)
+        self.loading = False
+        self.table.resizeRowsToContents()
+        if self.captions:
+            self.table.selectRow(max(0, min(select, len(self.captions) - 1)))
+
+    def on_selection(self):
+        rows = sorted({i.row() for i in self.table.selectedIndexes()})
+        if len(rows) == 1:
+            r = rows[0]
+            if not self.following:
+                self.seek.emit(round(self.captions[r]["start"] * 1000))
+
+    def follow_position(self, seconds: float):
+        if not self.captions:
+            return
+        current = next(
+            (i for i, c in enumerate(self.captions)
+             if c["start"] <= seconds < c["end"]),
+            -1,
+        )
+        if current >= 0 and current != self.table.currentRow():
+            self.following = True
+            self.table.selectRow(current)
+            self.table.scrollToItem(self.table.item(current, 0))
+            self.following = False
+
+    def on_item_changed(self, item):
+        if not self.loading and item.column() == 3:
+            self.captions[item.row()]["text"] = clean_lines(item.text())
+            self.table.resizeRowToContents(item.row())
+            self.changed.emit()
+
+    def on_live_text(self, row: int, text: str):
+        if 0 <= row < len(self.captions):
+            self.captions[row]["text"] = text
+            self.changed.emit()
+
+    def set_row_text(self, row: int, text: str):
+        if not (0 <= row < len(self.captions)):
+            return
+        self.captions[row]["text"] = text
+        self.loading = True
+        self.table.item(row, 3).setText(text)
+        self.loading = False
+        self.changed.emit()
+
+    def commit_row_text(self, row: int):
+        if not (0 <= row < len(self.captions)):
+            return
+        text = clean_lines(self.captions[row]["text"])
+        self.captions[row]["text"] = text
+        self.loading = True
+        self.table.item(row, 3).setText(text)
+        self.loading = False
+        self.table.resizeRowToContents(row)
+
+    def merge(self):
+        self.commit_text()
+        rows = sorted({i.row() for i in self.table.selectedIndexes()})
+        if len(rows) != 2 or rows[1] != rows[0] + 1:
+            QMessageBox.information(self, APP_NAME, "Selecione exatamente dois trechos consecutivos.")
+            return
+        a, b = rows
+        self.captions[a] = {
+            "start": self.captions[a]["start"], "end": self.captions[b]["end"],
+            "text": clean(self.captions[a]["text"] + " " + self.captions[b]["text"]),
+        }
+        del self.captions[b]
+        self.refresh(a)
+        self.changed.emit()
+
+    def delete_selected(self):
+        rows = sorted({i.row() for i in self.table.selectedIndexes()}, reverse=True)
+        if not rows:
+            return
+        for r in rows:
+            if 0 <= r < len(self.captions):
+                del self.captions[r]
+        target = min(rows[-1], len(self.captions) - 1)
+        self.refresh(max(0, target))
+        self.changed.emit()
+
+    def split_row(self, row: int, left: str, right: str) -> bool:
+        left, right = clean_lines(left), clean_lines(right)
+        if not (0 <= row < len(self.captions)) or not left or not right:
+            return False
+        c = self.captions[row]
+        middle = (c["start"] + c["end"]) / 2
+        self.captions[row:row + 1] = [
+            {"start": c["start"], "end": middle, "text": left},
+            {"start": middle, "end": c["end"], "text": right},
+        ]
+        self.refresh(row)
+        self.changed.emit()
+        return True
+
+    def split(self):
+        row = self.table.currentRow()
+        if row < 0:
+            return
+        editor = QApplication.focusWidget()
+        if not isinstance(editor, QPlainTextEdit) or not self.table.isAncestorOf(editor):
+            QMessageBox.information(
+                self, APP_NAME,
+                "Clique no texto do trecho, posicione o cursor e pressione F5."
+            )
+            return
+        raw = editor.toPlainText()
+        pos = editor.textCursor().position()
+        if not self.split_row(row, raw[:pos], raw[pos:]):
+            QMessageBox.information(self, APP_NAME, "Posicione o cursor entre duas partes do texto.")
+
+    def update_timing(self, row: int):
+        if not (0 <= row < len(self.captions)):
+            return
+        self.loading = True
+        self.table.item(row, 1).setText(editor_time(self.captions[row]["start"]))
+        self.table.item(row, 2).setText(editor_time(self.captions[row]["end"]))
+        self.loading = False
+
+    def select_segment(self, row: int):
+        if 0 <= row < len(self.captions):
+            self.following = True
+            self.table.selectRow(row)
+            self.table.scrollToItem(self.table.item(row, 0))
+            self.following = False
+
+
+class MainWindow(QMainWindow):
+    waveformReady = Signal(object, float)
+
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle(APP_NAME)
+        self.resize(1240, 820)
+        self.setAcceptDrops(True)
+        self.video: Path | None = None
+        self.pt: list[dict] = []
+        self.en: list[dict] = []
+        self.thread = None
+        self.busy = False
+        self.overlay_updating = False
+        self.loading_first_frame = False
+        self.player = QMediaPlayer(self)
+        self.audio = QAudioOutput(self)
+        self.player.setAudioOutput(self.audio)
+        self.audio.setVolume(.8)
+        self.build()
+        self.style()
+        self.setAcceptDrops(True)
+        for widget in self.findChildren(QWidget):
+            widget.setAcceptDrops(True)
+            widget.installEventFilter(self)
+
+    def style(self):
+        self.setStyleSheet("""
+        QMainWindow,QWidget { background:#0d1017; color:#e8ebf2; font:10pt "Segoe UI"; }
+        QLabel { background:transparent; }
+        QLabel#brand { font:13pt "Segoe UI Semibold"; letter-spacing:2px; }
+        QLabel#sectionTitle { color:#8b96ab; font:9pt "Segoe UI Semibold"; letter-spacing:1px; }
+        QFrame#card { background:#151a24; border:1px solid #2c3444; border-radius:10px; }
+        QFrame#section { background:#111620; border:1px solid #30394b; border-radius:8px; }
+        QPushButton { background:#252c3a; border:0; border-radius:6px; padding:7px 12px; }
+        QPushButton:hover { background:#333c4e; }
+        QPushButton:pressed { background:#3d4759; }
+        QPushButton#primary { background:#ff426d; color:white; font-weight:600; }
+        QPushButton#primary:hover { background:#ff5c81; }
+        QPushButton#primary:pressed { background:#e03a61; }
+        QPushButton:disabled { color:#657084; background:#1b202b; }
+        QComboBox, QFontComboBox, QSpinBox {
+          background:#1a202c; border:1px solid #313a4c; border-radius:6px; padding:4px 6px; }
+        QComboBox:hover, QSpinBox:hover { border-color:#4a5468; }
+        QComboBox::drop-down { border:0; width:22px; }
+        QComboBox::down-arrow { image:none; border-left:4px solid transparent;
+          border-right:4px solid transparent; border-top:5px solid #8993a8; margin-right:7px; }
+        QComboBox QAbstractItemView { background:#1a202c; border:1px solid #313a4c;
+          selection-background-color:#7e2941; outline:0; }
+        QTableWidget { background:#121720; alternate-background-color:#171d28;
+          gridline-color:#252d3b; selection-background-color:#7e2941; border:0; }
+        QHeaderView::section { background:#1a2130; padding:8px; border:0; font-weight:600; }
+        QTableCornerButton::section { background:#1a2130; border:0; }
+        QPlainTextEdit { background:#121720; border:1px solid #313a4c; border-radius:6px; padding:6px; }
+        QSlider::groove:horizontal { height:5px; background:#293141; border-radius:2px; }
+        QSlider::sub-page:horizontal { height:5px; background:#8f2c49; border-radius:2px; }
+        QSlider::handle:horizontal { width:14px; margin:-5px 0; background:#ff426d; border-radius:7px; }
+        QSlider::handle:horizontal:hover { background:#ff5c81; }
+        QSplitter::handle { background:#1c2330; }
+        QSplitter::handle:horizontal { width:5px; }
+        QSplitter::handle:vertical { height:5px; }
+        QTabWidget::pane { border:0; }
+        QTabBar::tab { background:#1b212d; padding:8px 20px; margin-right:2px;
+          border-top-left-radius:6px; border-top-right-radius:6px; }
+        QTabBar::tab:selected { background:#ff426d; color:white; font-weight:600; }
+        QTabBar::tab:!selected:hover { background:#252d3c; }
+        QScrollBar:vertical { background:transparent; width:11px; margin:0; }
+        QScrollBar::handle:vertical { background:#323b4d; border-radius:5px; min-height:30px; }
+        QScrollBar::handle:vertical:hover { background:#414c62; }
+        QScrollBar:horizontal { background:transparent; height:11px; margin:0; }
+        QScrollBar::handle:horizontal { background:#323b4d; border-radius:5px; min-width:30px; }
+        QScrollBar::handle:horizontal:hover { background:#414c62; }
+        QScrollBar::add-line, QScrollBar::sub-line { height:0; width:0; }
+        QScrollBar::add-page, QScrollBar::sub-page { background:transparent; }
+        QProgressBar { background:#1a202c; border:0; border-radius:8px;
+          min-height:17px; max-height:17px; font-size:8pt; color:white; }
+        QProgressBar::chunk { background:#ff426d; border-radius:8px; }
+        QToolTip { background:#1a202c; color:#e8ebf2; border:1px solid #313a4c; padding:4px; }
+        """)
+
+    def build(self):
+        central = QWidget()
+        layout = QVBoxLayout(central)
+        title = QHBoxLayout()
+        title.addWidget(QLabel("<b style='color:#ff426d'>DIN</b> SUBTITLER", objectName="brand"))
+        title.addStretch()
+        layout.addLayout(title)
+        top = QSplitter(Qt.Orientation.Horizontal)
+        top.setChildrenCollapsible(False)
+        player_card = QFrame(objectName="card")
+        player_layout = QVBoxLayout(player_card)
+        player_layout.setContentsMargins(6, 6, 6, 6)
+        player_layout.setSpacing(5)
+        self.video_scene = QGraphicsScene(self)
+        self.video_view = VideoDropView(self.video_scene)
+        self.video_view.setStyleSheet("background:#030405;border:0")
+        self.video_view.setFrameShape(QFrame.Shape.NoFrame)
+        self.video_view.setMinimumHeight(250)
+        self.video_view.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.video_item = QGraphicsVideoItem()
+        self.video_scene.addItem(self.video_item)
+        self.subtitle_overlay = SubtitleOverlay()
+        self.video_scene.addItem(self.subtitle_overlay)
+        self.subtitle_overlay.moved.connect(self.overlay_moved)
+        self.subtitle_overlay.textEdited.connect(self.overlay_text_edited)
+        self.subtitle_overlay.editingFinished.connect(self.overlay_editing_finished)
+        self.video_item.nativeSizeChanged.connect(self.video_size_changed)
+        self.player.setVideoOutput(self.video_item)
+        player_layout.addWidget(self.video_view, 1)
+        transport = QHBoxLayout()
+        transport.setContentsMargins(0, 0, 0, 0)
+        self.play_btn = QPushButton("▶")
+        self.play_btn.setFixedSize(42, 30)
+        self.time_label = QLabel("00:00 / 00:00")
+        self.seek_slider = QSlider(Qt.Orientation.Horizontal)
+        transport.addWidget(self.play_btn)
+        transport.addWidget(self.seek_slider, 1)
+        transport.addWidget(self.time_label)
+        transport.addSpacing(10)
+        transport.addWidget(QLabel("🔊"))
+        self.volume_slider = QSlider(Qt.Orientation.Horizontal)
+        self.volume_slider.setRange(0, 100)
+        self.volume_slider.setValue(80)
+        self.volume_slider.setFixedWidth(90)
+        self.volume_slider.setToolTip("Volume")
+        self.volume_slider.valueChanged.connect(lambda v: self.audio.setVolume(v / 100))
+        transport.addWidget(self.volume_slider)
+        player_layout.addLayout(transport)
+        preview = QHBoxLayout()
+        preview.setContentsMargins(2, 2, 2, 2)
+        preview.setSpacing(8)
+        preview.addWidget(QLabel("Fonte"))
+        self.font_box = QFontComboBox()
+        self.font_box.setEditable(False)
+        self.font_box.setCurrentFont(QFont("Arial"))
+        self.font_box.setFixedWidth(170)
+        preview.addWidget(self.font_box)
+        self.font_size = QSpinBox()
+        self.font_size.setRange(18, 100)
+        self.font_size.setValue(48)
+        self.font_size.setFixedWidth(48)
+        self.font_size.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self.font_size.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.font_size.setToolTip("Tamanho da fonte")
+        preview.addWidget(self.font_size)
+        self.font_size_slider = QSlider(Qt.Orientation.Horizontal)
+        self.font_size_slider.setRange(18, 100)
+        self.font_size_slider.setValue(48)
+        self.font_size_slider.setFixedWidth(120)
+        preview.addWidget(self.font_size_slider)
+        self.font_size.valueChanged.connect(self.font_size_slider.setValue)
+        self.font_size_slider.valueChanged.connect(self.font_size.setValue)
+        preview.addSpacing(14)
+        preview.addWidget(QLabel("X"))
+        self.subtitle_x_spin = QSpinBox()
+        self.subtitle_x_spin.setRange(0, 100)
+        self.subtitle_x_spin.setValue(50)
+        self.subtitle_x_spin.setSuffix(" %")
+        self.subtitle_x_spin.setFixedWidth(60)
+        self.subtitle_x_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self.subtitle_x_spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        preview.addWidget(self.subtitle_x_spin)
+        self.subtitle_x = QSlider(Qt.Orientation.Horizontal)
+        self.subtitle_x.setRange(0, 100)
+        self.subtitle_x.setValue(50)
+        self.subtitle_x.setFixedWidth(150)
+        preview.addWidget(self.subtitle_x)
+        preview.addSpacing(14)
+        preview.addWidget(QLabel("Y"))
+        self.subtitle_y_spin = QSpinBox()
+        self.subtitle_y_spin.setRange(0, 100)
+        self.subtitle_y_spin.setValue(82)
+        self.subtitle_y_spin.setSuffix(" %")
+        self.subtitle_y_spin.setFixedWidth(60)
+        self.subtitle_y_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self.subtitle_y_spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        preview.addWidget(self.subtitle_y_spin)
+        self.subtitle_y = QSlider(Qt.Orientation.Horizontal)
+        self.subtitle_y.setRange(0, 100)
+        self.subtitle_y.setValue(82)
+        self.subtitle_y.setFixedWidth(150)
+        preview.addWidget(self.subtitle_y)
+        preview.addStretch()
+        player_layout.addLayout(preview)
+        self.subtitle_x.valueChanged.connect(self.subtitle_x_spin.setValue)
+        self.subtitle_x_spin.valueChanged.connect(self.subtitle_x.setValue)
+        self.subtitle_y.valueChanged.connect(self.subtitle_y_spin.setValue)
+        self.subtitle_y_spin.valueChanged.connect(self.subtitle_y.setValue)
+        waveform_card = QFrame(objectName="card")
+        waveform_layout = QVBoxLayout(waveform_card)
+        waveform_layout.setContentsMargins(6, 6, 6, 6)
+        self.waveform = WaveformPanel()
+        waveform_layout.addWidget(self.waveform)
+        self.media_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.media_splitter.setChildrenCollapsible(False)
+        self.media_splitter.addWidget(player_card)
+        self.media_splitter.addWidget(waveform_card)
+        self.media_splitter.setStretchFactor(0, 4)
+        self.media_splitter.setStretchFactor(1, 1)
+        self.media_splitter.setSizes([390, 135])
+        top.addWidget(self.media_splitter)
+        actions = QFrame(objectName="card")
+        actions.setMinimumWidth(300)
+        av = QVBoxLayout(actions)
+        av.setContentsMargins(8, 8, 8, 8)
+        av.setSpacing(6)
+        self.file_label = QLabel("Arraste um vídeo em qualquer lugar\nou clique em Carregar vídeo")
+        self.file_label.setWordWrap(True)
+        av.addWidget(self.file_label)
+        load = QPushButton("Carregar vídeo")
+        load.clicked.connect(self.choose_video)
+        av.addWidget(load)
+        av.addSpacing(8)
+        transcription = QFrame(objectName="section")
+        tv = QVBoxLayout(transcription)
+        tv.setContentsMargins(8, 8, 8, 8)
+        tv.setSpacing(5)
+        tv.addWidget(QLabel("TRANSCRIÇÃO EM PORTUGUÊS", objectName="sectionTitle"))
+        self.transcribe_btn = QPushButton("1. Transcrever para português", objectName="primary")
+        self.save_pt_btn = QPushButton("Salvar SRT em português")
+        tv.addWidget(self.transcribe_btn)
+        tv.addWidget(self.save_pt_btn)
+        av.addWidget(transcription)
+        translation = QFrame(objectName="section")
+        ev = QVBoxLayout(translation)
+        ev.setContentsMargins(8, 8, 8, 8)
+        ev.setSpacing(5)
+        ev.addWidget(QLabel("TRADUÇÃO PARA INGLÊS", objectName="sectionTitle"))
+        self.translate_btn = QPushButton("2. Traduzir para inglês", objectName="primary")
+        self.save_en_btn = QPushButton("Salvar SRT em inglês")
+        ev.addWidget(self.translate_btn)
+        ev.addWidget(self.save_en_btn)
+        av.addWidget(translation)
+        av.addStretch()
+        top.addWidget(actions)
+        top.setStretchFactor(0, 1)
+        top.setStretchFactor(1, 0)
+        top.setSizes([920, 320])
+        self.editors = QTabWidget()
+        self.pt_editor = SubtitleEditor("português")
+        self.en_editor = SubtitleEditor("inglês")
+        self.editors.addTab(self.pt_editor, "Português")
+        self.editors.addTab(self.en_editor, "English")
+        corner = QWidget()
+        corner_layout = QHBoxLayout(corner)
+        corner_layout.setContentsMargins(0, 0, 6, 0)
+        corner_layout.setSpacing(6)
+        self.merge_btn = QPushButton("Juntar  ·  F4")
+        self.split_btn = QPushButton("Separar no cursor  ·  F5")
+        corner_layout.addWidget(self.merge_btn)
+        corner_layout.addWidget(self.split_btn)
+        self.editors.setCornerWidget(corner, Qt.Corner.TopRightCorner)
+        self.workspace = QSplitter(Qt.Orientation.Vertical)
+        self.workspace.setChildrenCollapsible(False)
+        self.workspace.addWidget(top)
+        self.workspace.addWidget(self.editors)
+        self.workspace.setStretchFactor(0, 3)
+        self.workspace.setStretchFactor(1, 2)
+        self.workspace.setSizes([470, 360])
+        layout.addWidget(self.workspace, 1)
+        status = QHBoxLayout()
+        self.status = QLabel("Pronto")
+        self.progress = QProgressBar()
+        self.progress.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.progress.setMaximumWidth(300)
+        self.progress.setVisible(False)
+        status.addWidget(self.status)
+        status.addStretch()
+        status.addWidget(self.progress)
+        layout.addLayout(status)
+        self.setCentralWidget(central)
+        self.play_btn.clicked.connect(self.toggle_play)
+        self.seek_slider.sliderMoved.connect(self.player.setPosition)
+        self.player.positionChanged.connect(self.position_changed)
+        self.player.durationChanged.connect(lambda d: self.seek_slider.setRange(0, d))
+        self.player.mediaStatusChanged.connect(self.media_status_changed)
+        self.player.playbackStateChanged.connect(
+            lambda s: self.play_btn.setText("❚❚" if s == QMediaPlayer.PlaybackState.PlayingState else "▶")
+        )
+        self.transcribe_btn.clicked.connect(self.transcribe)
+        self.translate_btn.clicked.connect(self.translate)
+        self.save_pt_btn.clicked.connect(lambda: self.save("pt"))
+        self.save_en_btn.clicked.connect(lambda: self.save("en"))
+        self.merge_btn.clicked.connect(lambda: self.active_editor().merge())
+        self.split_btn.clicked.connect(self.trigger_split)
+        QShortcut(QKeySequence("F4"), self, activated=lambda: self.active_editor().merge())
+        QShortcut(QKeySequence("F5"), self, activated=self.trigger_split)
+        self.pt_editor.seek.connect(self.player.setPosition)
+        self.en_editor.seek.connect(self.player.setPosition)
+        self.pt_editor.changed.connect(self.update_subtitle_preview)
+        self.en_editor.changed.connect(self.update_subtitle_preview)
+        self.pt_editor.changed.connect(self.editor_changed)
+        self.en_editor.changed.connect(self.editor_changed)
+        self.editors.currentChanged.connect(self.editor_tab_changed)
+        self.font_box.currentFontChanged.connect(lambda _f: self.update_subtitle_preview())
+        self.font_size.valueChanged.connect(lambda _v: self.update_subtitle_preview())
+        self.subtitle_x.valueChanged.connect(lambda _v: self.position_overlay())
+        self.subtitle_y.valueChanged.connect(lambda _v: self.position_overlay())
+        self.video_view.videoDropped.connect(lambda path: self.load_video(Path(path)))
+        self.waveform.seekRequested.connect(self.player.setPosition)
+        self.waveform.segmentChanged.connect(self.waveform_segment_changed)
+        self.waveform.segmentSelected.connect(self.waveform_segment_selected)
+        self.waveformReady.connect(self.waveform.set_waveform)
+        self.update_buttons()
+
+    def update_buttons(self):
+        has_video, has_pt, has_en = bool(self.video), bool(self.pt), bool(self.en)
+        self.transcribe_btn.setEnabled(has_video)
+        self.save_pt_btn.setEnabled(has_pt)
+        self.translate_btn.setEnabled(has_video)
+        self.save_en_btn.setEnabled(has_en)
+
+    def dragEnterEvent(self, e):
+        if e.mimeData().hasUrls() and not self.busy:
+            e.acceptProposedAction()
+
+    def dropEvent(self, e):
+        paths = [Path(x.toLocalFile()) for x in e.mimeData().urls()]
+        if paths:
+            self.load_video(paths[0])
+            e.acceptProposedAction()
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.Type.Resize and watched is self.video_view:
+            QTimer.singleShot(0, self.fit_video)
+        if event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Space:
+            focus = QApplication.focusWidget()
+            if not isinstance(focus, (QLineEdit, QPlainTextEdit)) and not self.subtitle_overlay.editing:
+                self.toggle_play()
+                return True
+        if event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Delete:
+            editor = self.active_editor()
+            if QApplication.focusWidget() is editor.table:
+                editor.delete_selected()
+                return True
+        if event.type() == QEvent.Type.DragEnter and event.mimeData().hasUrls():
+            if not self.busy:
+                event.acceptProposedAction()
+            return True
+        if event.type() == QEvent.Type.Drop and event.mimeData().hasUrls():
+            if not self.busy:
+                paths = [Path(x.toLocalFile()) for x in event.mimeData().urls()]
+                if paths:
+                    self.load_video(paths[0])
+                    event.acceptProposedAction()
+            return True
+        return super().eventFilter(watched, event)
+
+    def video_size_changed(self, size):
+        if size.width() <= 0 or size.height() <= 0:
+            return
+        self.video_scene.setSceneRect(0, 0, size.width(), size.height())
+        self.video_item.setSize(size)
+        self.subtitle_overlay.setTextWidth(size.width() * .82)
+        self.position_overlay()
+        self.fit_video()
+
+    def fit_video(self):
+        rect = self.video_scene.sceneRect()
+        if rect.width() > 0 and rect.height() > 0:
+            self.video_view.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
+
+    def media_status_changed(self, status):
+        if (
+            status == QMediaPlayer.MediaStatus.LoadedMedia
+            and self.loading_first_frame
+        ):
+            self.loading_first_frame = False
+            self.audio.setMuted(True)
+            self.player.setPosition(1)
+            self.player.play()
+            QTimer.singleShot(120, self.freeze_first_frame)
+
+    def freeze_first_frame(self):
+        self.player.pause()
+        self.player.setPosition(0)
+        self.audio.setMuted(False)
+
+    def update_subtitle_preview(self):
+        if self.subtitle_overlay.editing:
+            return
+        captions = self.active_editor().captions
+        seconds = self.player.position() / 1000
+        text = next(
+            (c["text"] for c in captions if c["start"] <= seconds < c["end"]),
+            "",
+        )
+        text = wrap_caption(text)
+        font = QFont(self.font_box.currentFont())
+        font.setPixelSize(self.font_size.value())
+        font.setWeight(QFont.Weight.DemiBold)
+        self.subtitle_overlay.setFont(font)
+        safe = html.escape(text).replace("\n", "<br>")
+        self.subtitle_overlay.setHtml(
+            f"<div style='color:white;background-color:rgba(0,0,0,150);"
+            f"padding:8px;text-align:center'>{safe}</div>"
+        )
+        self.subtitle_overlay.setVisible(bool(text))
+        self.position_overlay()
+
+    def position_overlay(self):
+        if self.overlay_updating:
+            return
+        rect = self.video_scene.sceneRect()
+        if rect.width() <= 0:
+            return
+        bounds = self.subtitle_overlay.boundingRect()
+        x = rect.left() + rect.width() * self.subtitle_x.value() / 100 - bounds.width() / 2
+        y = rect.top() + rect.height() * self.subtitle_y.value() / 100 - bounds.height() / 2
+        x = max(rect.left(), min(x, rect.right() - bounds.width()))
+        y = max(rect.top(), min(y, rect.bottom() - bounds.height()))
+        self.overlay_updating = True
+        self.subtitle_overlay.setPos(x, y)
+        self.overlay_updating = False
+
+    def overlay_moved(self):
+        if self.overlay_updating:
+            return
+        rect = self.video_scene.sceneRect()
+        if rect.width() <= 0:
+            return
+        bounds = self.subtitle_overlay.boundingRect()
+        center_x = self.subtitle_overlay.x() + bounds.width() / 2
+        center_y = self.subtitle_overlay.y() + bounds.height() / 2
+        x = round(100 * (center_x - rect.left()) / rect.width())
+        y = round(100 * (center_y - rect.top()) / rect.height())
+        for widget, value in (
+            (self.subtitle_x, x), (self.subtitle_x_spin, x),
+            (self.subtitle_y, y), (self.subtitle_y_spin, y),
+        ):
+            widget.blockSignals(True)
+            widget.setValue(max(0, min(100, value)))
+            widget.blockSignals(False)
+
+    def overlay_text_edited(self, text):
+        editor = self.active_editor()
+        editor.set_row_text(editor.table.currentRow(), text)
+
+    def overlay_editing_finished(self):
+        editor = self.active_editor()
+        editor.commit_row_text(editor.table.currentRow())
+        self.update_subtitle_preview()
+
+    def trigger_split(self):
+        if self.subtitle_overlay.editing:
+            editor = self.active_editor()
+            row = editor.table.currentRow()
+            text = self.subtitle_overlay.toPlainText()
+            pos = self.subtitle_overlay.textCursor().position()
+            if not editor.split_row(row, text[:pos], text[pos:]):
+                QMessageBox.information(self, APP_NAME, "Posicione o cursor entre duas partes do texto.")
+                return
+            self.subtitle_overlay.stop_editing()
+            return
+        self.active_editor().split()
+
+    def choose_video(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Carregar vídeo", "", "Vídeos (*.mp4 *.mov *.mkv *.avi *.webm *.m4v *.wmv)"
+        )
+        if path:
+            self.load_video(Path(path))
+
+    def load_video(self, path: Path):
+        if self.busy:
+            return
+        if path.suffix.lower() not in VIDEO_TYPES:
+            QMessageBox.warning(self, APP_NAME, "Selecione um arquivo de vídeo válido.")
+            return
+        self.video, self.pt, self.en = path, [], []
+        self.file_label.setText(f"<b>{path.name}</b><br>{path.stat().st_size / 1048576:.1f} MB")
+        self.loading_first_frame = True
+        self.player.setSource(QUrl.fromLocalFile(str(path)))
+        self.waveform.set_captions([])
+        self.waveform.set_waveform([], 1.0)
+        self.load_waveform(path)
+        self.update_buttons()
+
+    def load_waveform(self, path: Path):
+        def worker():
+            try:
+                proc = subprocess.run(
+                    [
+                        "ffmpeg", "-i", str(path), "-vn", "-ac", "1", "-ar", "8000",
+                        "-f", "s16le", "-",
+                    ],
+                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+                )
+                if proc.returncode or not proc.stdout:
+                    return
+                samples = array("h")
+                samples.frombytes(proc.stdout)
+                bucket = 160
+                peaks = [
+                    max((abs(v) for v in samples[i:i + bucket]), default=0) / 32768
+                    for i in range(0, len(samples), bucket)
+                ]
+                self.waveformReady.emit(peaks, len(samples) / 8000)
+            except Exception:
+                pass
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def toggle_play(self):
+        if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self.player.pause()
+        else:
+            self.player.play()
+
+    def position_changed(self, pos):
+        self.seek_slider.setValue(pos)
+        self.time_label.setText(f"{clock(pos)} / {clock(self.player.duration())}")
+        self.waveform.set_position(pos / 1000)
+        self.update_subtitle_preview()
+        self.active_editor().follow_position(pos / 1000)
+
+    def show_editor(self, index):
+        self.editors.setCurrentIndex(index)
+        editor = self.pt_editor if index == 0 else self.en_editor
+        self.waveform.set_captions(editor.captions)
+        self.update_subtitle_preview()
+
+    def active_editor(self):
+        return self.pt_editor if self.editors.currentIndex() == 0 else self.en_editor
+
+    def editor_tab_changed(self, _index):
+        editor = self.active_editor()
+        self.waveform.set_captions(editor.captions)
+        self.update_subtitle_preview()
+
+    def editor_changed(self):
+        editor = self.active_editor()
+        if self.editors.currentWidget() is editor:
+            self.waveform.set_captions(editor.captions)
+        if editor is self.pt_editor:
+            self.pt = editor.captions
+        else:
+            self.en = editor.captions
+        self.update_subtitle_preview()
+
+    def waveform_segment_changed(self, row: int):
+        editor = self.active_editor()
+        editor.update_timing(row)
+        if editor is self.pt_editor:
+            self.pt = editor.captions
+        else:
+            self.en = editor.captions
+        self.update_subtitle_preview()
+
+    def waveform_segment_selected(self, row: int):
+        self.active_editor().select_segment(row)
+
+    def run_job(self, operation):
+        self.progress.setVisible(True)
+        self.progress.setValue(0)
+        self.set_busy(True)
+        thread = QThread(self)
+        job = Job(operation)
+        job.moveToThread(thread)
+        thread.started.connect(job.run)
+        job.progress.connect(lambda text, value: (self.status.setText(text), self.progress.setValue(value)))
+        job.failed.connect(self.job_failed)
+        job.finished.connect(self.job_done)
+        job.finished.connect(thread.quit)
+        job.failed.connect(thread.quit)
+        thread.finished.connect(job.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        self.thread, self.job = thread, job
+        thread.start()
+
+    def job_failed(self, message):
+        self.set_busy(False)
+        self.progress.setVisible(False)
+        self.status.setText("Não foi possível concluir")
+        QMessageBox.critical(self, APP_NAME, message)
+
+    def job_done(self, payload):
+        self.set_busy(False)
+        self.progress.setVisible(False)
+        kind, captions = payload
+        if kind == "pt":
+            self.pt = captions
+            self.pt_editor.set_captions(self.pt)
+            self.show_editor(0)
+            self.status.setText("Transcrição pronta para revisão")
+        else:
+            self.en = captions
+            self.en_editor.set_captions(self.en)
+            self.show_editor(1)
+            self.status.setText("Tradução pronta para revisão")
+        self.update_buttons()
+
+    def set_busy(self, busy: bool):
+        self.busy = busy
+        if busy:
+            for button in (
+                self.transcribe_btn, self.save_pt_btn,
+                self.translate_btn, self.save_en_btn,
+            ):
+                button.setEnabled(False)
+        else:
+            self.update_buttons()
+
+    def transcribe(self):
+        video = self.video
+        self.run_job(lambda emit: ("pt", Engine(emit).transcribe(video)))
+
+    def translate(self):
+        video = self.video
+        self.run_job(lambda emit: ("en", Engine(emit).translate(video)))
+
+    def save(self, language):
+        editor = self.pt_editor if language == "pt" else self.en_editor
+        editor.commit_text()
+        captions = [dict(x) for x in editor.captions]
+        if language == "pt":
+            self.pt = captions
+        else:
+            self.en = captions
+        default = self.video.with_name(f"{self.video.stem}.{language}.srt")
+        path, _ = QFileDialog.getSaveFileName(self, "Salvar legenda", str(default), "SubRip (*.srt)")
+        if path:
+            if not path.lower().endswith(".srt"):
+                path += ".srt"
+            write_srt(Path(path), captions)
+            self.status.setText(f"Salvo: {path}")
+
+
+def make_app_icon() -> QIcon:
+    icon = QIcon()
+    for size in (16, 24, 32, 48, 64, 128, 256):
+        pm = QPixmap(size, size)
+        pm.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        gradient = QLinearGradient(0, 0, size, size)
+        gradient.setColorAt(0, QColor("#ff5c81"))
+        gradient.setColorAt(1, QColor("#a3204a"))
+        p.setBrush(QBrush(gradient))
+        p.setPen(Qt.PenStyle.NoPen)
+        radius = size * .22
+        p.drawRoundedRect(0, 0, size, size, radius, radius)
+        p.setBrush(QColor(255, 255, 255, 235))
+        play = QPolygonF([
+            QPointF(size * .38, size * .18),
+            QPointF(size * .68, size * .35),
+            QPointF(size * .38, size * .52),
+        ])
+        p.drawPolygon(play)
+        bar_h = max(1.5, size * .10)
+        p.drawRoundedRect(int(size * .16), int(size * .62), int(size * .68), int(bar_h), bar_h / 2, bar_h / 2)
+        p.drawRoundedRect(int(size * .28), int(size * .78), int(size * .44), int(bar_h), bar_h / 2, bar_h / 2)
+        p.end()
+        icon.addPixmap(pm)
+    return icon
+
+
+if __name__ == "__main__":
+    if os.name == "nt":
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("DinCreation.DinSubtitler")
+    app = QApplication(sys.argv)
+    app.setApplicationName(APP_NAME)
+    app.setWindowIcon(make_app_icon())
+    window = MainWindow()
+    window.show()
+    sys.exit(app.exec())

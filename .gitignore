@@ -1,0 +1,23 @@
+.venv/
+.claude/
+__pycache__/
+*.py[cod]
+
+models/
+bin/
+crash.log
+
+*.mp4
+*.mov
+*.mkv
+*.avi
+*.webm
+*.m4v
+*.mpeg
+*.mpg
+*.wmv
+*.wav
+*.srt
+
+# Legacy prototype; the active application is app_v2.py.
+app.py
