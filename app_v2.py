@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
     QFontComboBox, QGraphicsItem, QGraphicsScene, QGraphicsTextItem, QGraphicsView,
     QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
     QScrollBar, QSizePolicy, QSlider, QSpinBox, QSplitter, QStyledItemDelegate,
-    QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
+    QTableWidget, QTableWidgetItem, QTabWidget, QToolTip, QVBoxLayout, QWidget,
 )
 
 
@@ -398,6 +398,26 @@ class ResetSlider(QSlider):
         event.accept()
 
 
+class VolumeSlider(ResetSlider):
+    def _show_value(self, event):
+        QToolTip.showText(
+            event.globalPosition().toPoint(), f"Volume: {self.value()}%", self
+        )
+
+    def mousePressEvent(self, event):
+        super().mousePressEvent(event)
+        self._show_value(event)
+
+    def mouseMoveEvent(self, event):
+        super().mouseMoveEvent(event)
+        if event.buttons() & Qt.MouseButton.LeftButton:
+            self._show_value(event)
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        self._show_value(event)
+
+
 class SubtitleTable(QTableWidget):
     def __init__(self, empty_text: str):
         super().__init__(0, 4)
@@ -647,8 +667,8 @@ class WaveformWidget(QWidget):
             p.drawLine(int(play_x), 0, int(play_x), self.height())
         p.end()
 
-    BOUNDARY_PX = 3
-    EDGE_PX = 7
+    BOUNDARY_PX = 5
+    EDGE_PX = 12
     MIN_GAP = 0.05
 
     def hit_segment(self, x, y):
@@ -660,15 +680,24 @@ class WaveformWidget(QWidget):
                 bx = self.time_to_x(a["end"])
                 if abs(x - bx) <= self.BOUNDARY_PX:
                     return i, "boundary"
+        edge_hits = []
         for i, c in enumerate(self.captions):
             x1, x2 = self.time_to_x(c["start"]), self.time_to_x(c["end"])
-            if x1 - self.EDGE_PX <= x <= x2 + self.EDGE_PX:
-                if abs(x - x1) <= self.EDGE_PX:
-                    return i, "start"
-                if abs(x - x2) <= self.EDGE_PX:
-                    return i, "end"
-                if x1 < x < x2:
-                    return i, "move"
+            start_distance = abs(x - x1)
+            end_distance = abs(x - x2)
+            if start_distance <= self.EDGE_PX:
+                edge_hits.append((start_distance, 0, i, "start"))
+            if end_distance <= self.EDGE_PX:
+                edge_hits.append((end_distance, 1, i, "end"))
+        if edge_hits:
+            nearest = min(hit[0] for hit in edge_hits)
+            tied = [hit for hit in edge_hits if hit[0] <= nearest + 0.5]
+            _distance, _priority, index, mode = min(tied, key=lambda hit: (hit[1], hit[0]))
+            return index, mode
+        for i, c in enumerate(self.captions):
+            x1, x2 = self.time_to_x(c["start"]), self.time_to_x(c["end"])
+            if x1 < x < x2:
+                return i, "move"
         return -1, None
 
     def neighbor_bounds(self, index):
@@ -1281,6 +1310,7 @@ class MainWindow(QMainWindow):
         self.busy = False
         self.overlay_updating = False
         self.loading_first_frame = False
+        self.user_muted = False
         self.player = QMediaPlayer(self)
         self.audio = QAudioOutput(self)
         self.player.setAudioOutput(self.audio)
@@ -1397,8 +1427,12 @@ class MainWindow(QMainWindow):
         transport.addWidget(self.seek_slider, 1)
         transport.addWidget(self.time_label)
         transport.addSpacing(10)
-        transport.addWidget(QLabel("🔊"))
-        self.volume_slider = QSlider(Qt.Orientation.Horizontal)
+        self.volume_btn = QPushButton("🔊")
+        self.volume_btn.setFixedSize(32, 30)
+        self.volume_btn.setToolTip("Mutar / desmutar")
+        self.volume_btn.clicked.connect(self.toggle_mute)
+        transport.addWidget(self.volume_btn)
+        self.volume_slider = VolumeSlider(Qt.Orientation.Horizontal, 80)
         self.volume_slider.setRange(0, 100)
         self.volume_slider.setValue(80)
         self.volume_slider.setFixedWidth(90)
@@ -1703,7 +1737,13 @@ class MainWindow(QMainWindow):
     def freeze_first_frame(self):
         self.player.pause()
         self.player.setPosition(0)
-        self.audio.setMuted(False)
+        self.audio.setMuted(self.user_muted)
+
+    def toggle_mute(self):
+        self.user_muted = not self.user_muted
+        self.audio.setMuted(self.user_muted)
+        self.volume_btn.setText("🔇" if self.user_muted else "🔊")
+        self.volume_btn.setToolTip("Desmutar" if self.user_muted else "Mutar")
 
     def update_subtitle_preview(self):
         if self.subtitle_overlay.editing:

@@ -53,6 +53,8 @@ O modelo Whisper será baixado automaticamente na primeira utilização e ficar�
 ## Controles do editor
 
 - `Espaço`: reproduzir ou pausar o vídeo
+- Clique no ícone de volume para mutar ou desmutar
+- Arraste o volume para ver o valor; dê duplo clique para voltar a 80%
 - `Ctrl + Z`: desfazer a última ação na faixa selecionada
 - `Ctrl + Shift + Z`: refazer a última ação desfeita
 - `↑` / `↓`: navegar entre os trechos sem entrar no modo de edição
