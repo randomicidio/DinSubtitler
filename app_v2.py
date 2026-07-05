@@ -14,9 +14,11 @@ from array import array
 from copy import deepcopy
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject, QPointF, QThread, QTimer, Qt, QUrl, Signal
+from PySide6.QtCore import (
+    QEvent, QItemSelectionModel, QObject, QPointF, QThread, QTimer, Qt, QUrl, Signal,
+)
 from PySide6.QtGui import (
-    QBrush, QColor, QFont, QIcon, QKeySequence, QLinearGradient, QPainter,
+    QBrush, QColor, QCursor, QFont, QIcon, QKeySequence, QLinearGradient, QPainter,
     QPen, QPixmap, QPolygonF, QShortcut,
 )
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
@@ -438,6 +440,8 @@ class WaveformWidget(QWidget):
     segmentChanged = Signal(int)
     segmentSelected = Signal(int)
     segmentEditStarted = Signal()
+    selectionChanged = Signal(object)
+    structureChanged = Signal(object)
     viewChanged = Signal()
 
     def __init__(self):
@@ -456,9 +460,15 @@ class WaveformWidget(QWidget):
         self.drag_index = -1
         self.drag_origin = 0.0
         self.original = None
+        self.selected_indices: set[int] = set()
+        self.rubber_start = None
+        self.rubber_end = None
+        self.preview_blocks: list[dict] = []
+        self.press_x = 0.0
+        self.pencil_cursor = self._make_pencil_cursor()
         self.setToolTip(
-            "Rodinha: zoom  •  Alt + rodinha: navegar  •  "
-            "Arraste blocos e bordas para ajustar tempos"
+            "Arraste vazio: selecionar  •  Ctrl + arrastar: criar bloco  •  "
+            "Alt + arrastar: duplicar  •  Rodinha: zoom  •  Alt + rodinha: navegar"
         )
 
     def set_waveform(self, peaks: list[float], duration: float):
@@ -476,7 +486,29 @@ class WaveformWidget(QWidget):
 
     def set_captions(self, captions: list[dict]):
         self.captions = captions
+        self.selected_indices = {
+            i for i in self.selected_indices if 0 <= i < len(captions)
+        }
         self.update()
+
+    def set_selected(self, indices):
+        self.selected_indices = {
+            int(i) for i in indices if 0 <= int(i) < len(self.captions)
+        }
+        self.update()
+
+    @staticmethod
+    def _make_pencil_cursor():
+        pixmap = QPixmap(24, 24)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor("#ffffff"), 3, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.drawLine(5, 19, 18, 6)
+        painter.setPen(QPen(QColor("#ff426d"), 2))
+        painter.drawLine(4, 20, 8, 19)
+        painter.end()
+        return QCursor(pixmap, 4, 20)
 
     def set_position(self, seconds: float):
         self.position = seconds
@@ -546,7 +578,12 @@ class WaveformWidget(QWidget):
             x1, x2 = self.time_to_x(c["start"]), self.time_to_x(c["end"])
             if x2 < 0 or x1 > self.width():
                 continue
-            color = QColor(255, 66, 109, 225) if i == self.drag_index else QColor(147, 64, 91, 205)
+            if i == self.drag_index:
+                color = QColor(255, 66, 109, 235)
+            elif i in self.selected_indices:
+                color = QColor(65, 145, 255, 220)
+            else:
+                color = QColor(147, 64, 91, 205)
             p.setBrush(QBrush(color))
             p.setPen(QPen(QColor("#ff87a1"), 1))
             p.drawRoundedRect(int(x1), block_top, max(3, int(x2 - x1)), block_height, 3, 3)
@@ -560,6 +597,19 @@ class WaveformWidget(QWidget):
                     c["text"].replace("\n", " "), Qt.TextElideMode.ElideRight, available
                 )
                 p.drawText(int(x1 + 4), block_top + block_height - 7, elided)
+        if self.rubber_start is not None and self.rubber_end is not None:
+            x1 = self.time_to_x(min(self.rubber_start, self.rubber_end))
+            x2 = self.time_to_x(max(self.rubber_start, self.rubber_end))
+            p.setBrush(QColor(67, 137, 255, 45))
+            p.setPen(QPen(QColor("#65a0ff"), 1, Qt.PenStyle.DashLine))
+            p.drawRect(int(x1), 1, max(1, int(x2 - x1)), self.height() - 2)
+        for block in self.preview_blocks:
+            x1, x2 = self.time_to_x(block["start"]), self.time_to_x(block["end"])
+            p.setBrush(QColor(80, 220, 155, 100))
+            p.setPen(QPen(QColor("#64e6ad"), 2, Qt.PenStyle.DashLine))
+            p.drawRoundedRect(
+                int(x1), block_top, max(3, int(x2 - x1)), block_height, 3, 3
+            )
         play_x = self.time_to_x(self.position)
         if 0 <= play_x <= self.width():
             p.setPen(QPen(QColor("#ffd166"), 2))
@@ -598,19 +648,51 @@ class WaveformWidget(QWidget):
     def mousePressEvent(self, event):
         time_at_mouse = self.x_to_time(event.position().x())
         index, mode = self.hit_segment(event.position().x(), event.position().y())
-        if index >= 0:
+        modifiers = event.modifiers()
+        self.press_x = event.position().x()
+        if (
+            modifiers & Qt.KeyboardModifier.ControlModifier
+            and index < 0
+        ):
+            self.segmentEditStarted.emit()
+            self.drag_mode = "create"
+            self.drag_origin = time_at_mouse
+            self.preview_blocks = [{
+                "start": time_at_mouse,
+                "end": time_at_mouse,
+                "text": "",
+            }]
+        elif (
+            modifiers & Qt.KeyboardModifier.AltModifier
+            and index >= 0
+            and mode != "boundary"
+        ):
+            if index not in self.selected_indices:
+                self.selected_indices = {index}
+                self.selectionChanged.emit(sorted(self.selected_indices))
+            indices = sorted(self.selected_indices)
+            self.segmentEditStarted.emit()
+            self.drag_mode = "copy"
+            self.drag_origin = time_at_mouse
+            self.original = [deepcopy(self.captions[i]) for i in indices]
+            self.preview_blocks = deepcopy(self.original)
+            self.drag_index = index
+        elif index >= 0:
             self.segmentEditStarted.emit()
             self.drag_index, self.drag_mode = index, mode
             self.drag_origin = time_at_mouse
             c = self.captions[index]
             self.original = (c["start"], c["end"])
+            if index not in self.selected_indices:
+                self.selected_indices = {index}
+                self.selectionChanged.emit([index])
             self.segmentSelected.emit(index)
             seek_time = c["end"] if mode == "boundary" else c["start"]
             self.seekRequested.emit(round(seek_time * 1000))
         else:
-            self.drag_mode = "playhead"
-            self.position = time_at_mouse
-            self.seekRequested.emit(round(time_at_mouse * 1000))
+            self.drag_mode = "rubber"
+            self.rubber_start = time_at_mouse
+            self.rubber_end = time_at_mouse
         self.update()
 
     CURSOR_BY_MODE = {
@@ -622,13 +704,38 @@ class WaveformWidget(QWidget):
 
     def mouseMoveEvent(self, event):
         if self.drag_mode is None:
-            _index, mode = self.hit_segment(event.position().x(), event.position().y())
-            self.setCursor(self.CURSOR_BY_MODE.get(mode, Qt.CursorShape.ArrowCursor))
+            index, mode = self.hit_segment(event.position().x(), event.position().y())
+            if (
+                event.modifiers() & Qt.KeyboardModifier.ControlModifier
+                and index < 0
+            ):
+                self.setCursor(self.pencil_cursor)
+            elif (
+                event.modifiers() & Qt.KeyboardModifier.AltModifier
+                and index >= 0
+            ):
+                self.setCursor(Qt.CursorShape.DragCopyCursor)
+            else:
+                self.setCursor(self.CURSOR_BY_MODE.get(mode, Qt.CursorShape.ArrowCursor))
             return
         now = self.x_to_time(event.position().x())
-        if self.drag_mode == "playhead":
-            self.position = now
-            self.seekRequested.emit(round(now * 1000))
+        if self.drag_mode == "rubber":
+            self.rubber_end = now
+        elif self.drag_mode == "create":
+            self.preview_blocks[0]["start"] = min(self.drag_origin, now)
+            self.preview_blocks[0]["end"] = max(self.drag_origin, now)
+        elif self.drag_mode == "copy":
+            earliest = min(c["start"] for c in self.original)
+            latest = max(c["end"] for c in self.original)
+            delta = max(-earliest, min(now - self.drag_origin, self.duration - latest))
+            self.preview_blocks = [
+                {
+                    "start": c["start"] + delta,
+                    "end": c["end"] + delta,
+                    "text": c["text"],
+                }
+                for c in self.original
+            ]
         elif self.drag_mode == "boundary":
             i = self.drag_index
             a, b = self.captions[i], self.captions[i + 1]
@@ -653,10 +760,84 @@ class WaveformWidget(QWidget):
             self.segmentChanged.emit(self.drag_index)
         self.update()
 
-    def mouseReleaseEvent(self, _event):
+    def mouseReleaseEvent(self, event):
+        if self.drag_mode == "rubber":
+            moved = abs(event.position().x() - self.press_x) >= 4
+            if moved:
+                start, end = sorted((self.rubber_start, self.rubber_end))
+                self.selected_indices = {
+                    i for i, c in enumerate(self.captions)
+                    if c["end"] > start and c["start"] < end
+                }
+                self.selectionChanged.emit(sorted(self.selected_indices))
+            else:
+                self.position = self.x_to_time(event.position().x())
+                self.selected_indices.clear()
+                self.selectionChanged.emit([])
+                self.seekRequested.emit(round(self.position * 1000))
+        elif self.drag_mode == "create":
+            block = self.preview_blocks[0]
+            if block["end"] - block["start"] >= self.MIN_GAP:
+                self._insert_with_crop([block])
+        elif self.drag_mode == "copy":
+            if self.preview_blocks and any(
+                abs(a["start"] - b["start"]) >= .001
+                for a, b in zip(self.preview_blocks, self.original)
+            ):
+                self._insert_with_crop(self.preview_blocks)
         self.drag_mode = None
+        self.drag_index = -1
         self.original = None
+        self.rubber_start = None
+        self.rubber_end = None
+        self.preview_blocks = []
         self.update()
+
+    def _insert_with_crop(self, new_blocks: list[dict]):
+        existing = list(self.captions)
+        for new in sorted(new_blocks, key=lambda c: c["start"]):
+            cropped = []
+            ns, ne = new["start"], new["end"]
+            for old in existing:
+                os_, oe = old["start"], old["end"]
+                if oe <= ns or os_ >= ne:
+                    cropped.append(old)
+                elif os_ >= ns and oe <= ne:
+                    continue
+                elif os_ < ns and oe > ne:
+                    left, right = ns - os_, oe - ne
+                    if left >= right:
+                        old["end"] = ns
+                    else:
+                        old["start"] = ne
+                    if old["end"] - old["start"] >= self.MIN_GAP:
+                        cropped.append(old)
+                elif os_ < ns < oe:
+                    old["end"] = ns
+                    if old["end"] - old["start"] >= self.MIN_GAP:
+                        cropped.append(old)
+                elif os_ < ne < oe:
+                    old["start"] = ne
+                    if old["end"] - old["start"] >= self.MIN_GAP:
+                        cropped.append(old)
+            existing = cropped
+        inserted = [deepcopy(block) for block in new_blocks]
+        combined = existing + inserted
+        combined.sort(key=lambda c: (c["start"], c["end"]))
+        self.captions[:] = combined
+        self.selected_indices = {
+            i for i, caption in enumerate(self.captions)
+            if any(caption is block for block in inserted)
+        }
+        # deepcopy above means identity survives the sort inside combined.
+        if not self.selected_indices:
+            self.selected_indices = {
+                i for i, caption in enumerate(self.captions)
+                if caption in inserted
+            }
+        selected = sorted(self.selected_indices)
+        self.structureChanged.emit(selected)
+        self.selectionChanged.emit(selected)
 
 
 class WaveformPanel(QWidget):
@@ -664,6 +845,8 @@ class WaveformPanel(QWidget):
     segmentChanged = Signal(int)
     segmentSelected = Signal(int)
     segmentEditStarted = Signal()
+    selectionChanged = Signal(object)
+    structureChanged = Signal(object)
 
     def __init__(self):
         super().__init__()
@@ -680,6 +863,8 @@ class WaveformPanel(QWidget):
         self.waveform.segmentChanged.connect(self.segmentChanged)
         self.waveform.segmentSelected.connect(self.segmentSelected)
         self.waveform.segmentEditStarted.connect(self.segmentEditStarted)
+        self.waveform.selectionChanged.connect(self.selectionChanged)
+        self.waveform.structureChanged.connect(self.structureChanged)
         self.waveform.viewChanged.connect(self.sync_scrollbar)
         self.scrollbar.valueChanged.connect(self.on_scrollbar)
 
@@ -760,6 +945,7 @@ class CaptionDelegate(QStyledItemDelegate):
 class SubtitleEditor(QWidget):
     seek = Signal(int)
     changed = Signal()
+    selectionChanged = Signal(object)
 
     def __init__(self, language: str, empty_text: str):
         super().__init__()
@@ -844,6 +1030,7 @@ class SubtitleEditor(QWidget):
 
     def on_selection(self):
         rows = sorted({i.row() for i in self.table.selectedIndexes()})
+        self.selectionChanged.emit(rows)
         if len(rows) == 1:
             r = rows[0]
             if not self.following:
@@ -966,6 +1153,23 @@ class SubtitleEditor(QWidget):
             self.table.selectRow(row)
             self.table.scrollToItem(self.table.item(row, 0))
             self.following = False
+
+    def select_segments(self, rows):
+        valid = sorted({int(row) for row in rows if 0 <= int(row) < len(self.captions)})
+        self.following = True
+        self.table.clearSelection()
+        if valid:
+            self.table.setCurrentCell(valid[0], 0)
+        selection = self.table.selectionModel()
+        for row in valid:
+            selection.select(
+                self.table.model().index(row, 0),
+                QItemSelectionModel.SelectionFlag.Select
+                | QItemSelectionModel.SelectionFlag.Rows,
+            )
+        if valid:
+            self.table.scrollToItem(self.table.item(valid[0], 0))
+        self.following = False
 
 
 class MainWindow(QMainWindow):
@@ -1285,6 +1489,12 @@ class MainWindow(QMainWindow):
         self.en_editor.changed.connect(self.update_subtitle_preview)
         self.pt_editor.changed.connect(self.editor_changed)
         self.en_editor.changed.connect(self.editor_changed)
+        self.pt_editor.selectionChanged.connect(
+            lambda rows: self.editor_selection_changed(self.pt_editor, rows)
+        )
+        self.en_editor.selectionChanged.connect(
+            lambda rows: self.editor_selection_changed(self.en_editor, rows)
+        )
         self.editors.currentChanged.connect(self.editor_tab_changed)
         self.font_box.currentFontChanged.connect(lambda _f: self.update_subtitle_preview())
         self.font_size.valueChanged.connect(lambda _v: self.update_subtitle_preview())
@@ -1295,6 +1505,10 @@ class MainWindow(QMainWindow):
         self.waveform.segmentChanged.connect(self.waveform_segment_changed)
         self.waveform.segmentSelected.connect(self.waveform_segment_selected)
         self.waveform.segmentEditStarted.connect(lambda: self.active_editor().push_undo())
+        self.waveform.selectionChanged.connect(
+            lambda rows: self.active_editor().select_segments(rows)
+        )
+        self.waveform.structureChanged.connect(self.waveform_structure_changed)
         self.waveformReady.connect(self.waveform.set_waveform)
         self.subtitle_overlay.editingStarted.connect(lambda: self.active_editor().push_undo())
         self.update_buttons()
@@ -1572,6 +1786,8 @@ class MainWindow(QMainWindow):
     def editor_tab_changed(self, _index):
         editor = self.active_editor()
         self.waveform.set_captions(editor.captions)
+        rows = sorted({item.row() for item in editor.table.selectedIndexes()})
+        self.waveform.waveform.set_selected(rows)
         self.update_subtitle_preview()
 
     def editor_changed(self):
@@ -1584,6 +1800,10 @@ class MainWindow(QMainWindow):
             self.en = editor.captions
         self.update_subtitle_preview()
 
+    def editor_selection_changed(self, editor, rows):
+        if editor is self.active_editor():
+            self.waveform.waveform.set_selected(rows)
+
     def waveform_segment_changed(self, row: int):
         editor = self.active_editor()
         editor.update_timing(row)
@@ -1595,6 +1815,17 @@ class MainWindow(QMainWindow):
 
     def waveform_segment_selected(self, row: int):
         self.active_editor().select_segment(row)
+
+    def waveform_structure_changed(self, selected_rows):
+        editor = self.active_editor()
+        target = selected_rows[0] if selected_rows else 0
+        editor.refresh(target)
+        editor.select_segments(selected_rows)
+        if editor is self.pt_editor:
+            self.pt = editor.captions
+        else:
+            self.en = editor.captions
+        editor.changed.emit()
 
     def run_job(self, operation):
         self.progress.setVisible(True)

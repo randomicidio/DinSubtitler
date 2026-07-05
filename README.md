@@ -67,9 +67,16 @@ O modelo Whisper será baixado automaticamente na primeira utilização e ficar�
 Na waveform:
 
 - Arraste a linha de reprodução para navegar pelo vídeo.
+- Arraste sobre uma área vazia para selecionar vários blocos por intervalo.
+- Segure `Ctrl` e arraste em uma área vazia para desenhar um novo bloco.
+- Selecione um ou mais blocos, segure `Alt` e arraste para criar uma cópia.
 - Arraste um bloco para mover o trecho inteiro.
 - Arraste as bordas para ajustar o início ou o fim.
 - Arraste a divisão entre blocos adjacentes para alterar os dois tempos simultaneamente.
+
+Blocos criados ou duplicados têm prioridade sobre os anteriores. Quando existe
+sobreposição, os blocos antigos são recortados automaticamente para que duas
+legendas nunca ocupem o mesmo intervalo.
 
 ## Privacidade e funcionamento offline
 
