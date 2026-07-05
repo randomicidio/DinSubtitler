@@ -470,6 +470,8 @@ class WaveformWidget(QWidget):
         self.pan_origin_x = 0.0
         self.pan_origin_start = 0.0
         self.pencil_cursor = self._make_pencil_cursor()
+        self.start_edge_cursor = self._make_edge_cursor(left=True)
+        self.end_edge_cursor = self._make_edge_cursor(left=False)
         self.setToolTip(
             "Esquerdo: reprodução  •  Direito: selecionar  •  "
             "Ctrl: criar  •  Alt: duplicar  •  Rodinha: zoom  •  "
@@ -518,6 +520,26 @@ class WaveformWidget(QWidget):
         painter.drawLine(4, 20, 8, 19)
         painter.end()
         return QCursor(pixmap, 4, 20)
+
+    @staticmethod
+    def _make_edge_cursor(left: bool):
+        pixmap = QPixmap(24, 24)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(
+            QPen(
+                QColor("#ffffff"), 2, Qt.PenStyle.SolidLine,
+                Qt.PenCapStyle.SquareCap, Qt.PenJoinStyle.MiterJoin,
+            )
+        )
+        x = 8 if left else 16
+        direction = 7 if left else -7
+        painter.drawLine(x, 4, x, 20)
+        painter.drawLine(x, 4, x + direction, 4)
+        painter.drawLine(x, 20, x + direction, 20)
+        painter.end()
+        return QCursor(pixmap, x, 12)
 
     def set_position(self, seconds: float):
         self.position = seconds
@@ -719,13 +741,6 @@ class WaveformWidget(QWidget):
             self.seekRequested.emit(round(self.position * 1000))
         self.update()
 
-    CURSOR_BY_MODE = {
-        "boundary": Qt.CursorShape.SplitHCursor,
-        "start": Qt.CursorShape.SizeHorCursor,
-        "end": Qt.CursorShape.SizeHorCursor,
-        "move": Qt.CursorShape.SizeAllCursor,
-    }
-
     def mouseMoveEvent(self, event):
         if self.drag_mode is None:
             index, mode = self.hit_segment(event.position().x(), event.position().y())
@@ -739,8 +754,16 @@ class WaveformWidget(QWidget):
                 and index >= 0
             ):
                 self.setCursor(Qt.CursorShape.DragCopyCursor)
+            elif mode == "start":
+                self.setCursor(self.start_edge_cursor)
+            elif mode == "end":
+                self.setCursor(self.end_edge_cursor)
+            elif mode == "boundary":
+                self.setCursor(Qt.CursorShape.SplitHCursor)
+            elif mode == "move":
+                self.setCursor(Qt.CursorShape.SizeAllCursor)
             else:
-                self.setCursor(self.CURSOR_BY_MODE.get(mode, Qt.CursorShape.ArrowCursor))
+                self.setCursor(Qt.CursorShape.ArrowCursor)
             return
         now = self.x_to_time(event.position().x())
         if self.drag_mode == "pan":
@@ -1394,15 +1417,15 @@ class MainWindow(QMainWindow):
         preview.addWidget(self.font_box)
         self.font_size = QSpinBox()
         self.font_size.setRange(18, 100)
-        self.font_size.setValue(48)
+        self.font_size.setValue(35)
         self.font_size.setFixedWidth(48)
         self.font_size.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         self.font_size.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.font_size.setToolTip("Tamanho da fonte")
         preview.addWidget(self.font_size)
-        self.font_size_slider = QSlider(Qt.Orientation.Horizontal)
+        self.font_size_slider = ResetSlider(Qt.Orientation.Horizontal, 35)
         self.font_size_slider.setRange(18, 100)
-        self.font_size_slider.setValue(48)
+        self.font_size_slider.setValue(35)
         self.font_size_slider.setFixedWidth(120)
         preview.addWidget(self.font_size_slider)
         self.font_size.valueChanged.connect(self.font_size_slider.setValue)
@@ -1426,15 +1449,15 @@ class MainWindow(QMainWindow):
         preview.addWidget(QLabel("Y"))
         self.subtitle_y_spin = QSpinBox()
         self.subtitle_y_spin.setRange(0, 100)
-        self.subtitle_y_spin.setValue(82)
+        self.subtitle_y_spin.setValue(65)
         self.subtitle_y_spin.setSuffix(" %")
         self.subtitle_y_spin.setFixedWidth(60)
         self.subtitle_y_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         self.subtitle_y_spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
         preview.addWidget(self.subtitle_y_spin)
-        self.subtitle_y = QSlider(Qt.Orientation.Horizontal)
+        self.subtitle_y = ResetSlider(Qt.Orientation.Horizontal, 65)
         self.subtitle_y.setRange(0, 100)
-        self.subtitle_y.setValue(82)
+        self.subtitle_y.setValue(65)
         self.subtitle_y.setFixedWidth(150)
         preview.addWidget(self.subtitle_y)
         preview.addStretch()
