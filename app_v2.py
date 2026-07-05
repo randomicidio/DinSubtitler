@@ -11,6 +11,7 @@ import tempfile
 import threading
 import traceback
 from array import array
+from copy import deepcopy
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QObject, QPointF, QThread, QTimer, Qt, QUrl, Signal
@@ -83,6 +84,46 @@ def clean_lines(text: str) -> str:
 
 def editor_time(seconds: float) -> str:
     return srt_time(seconds).replace(",", ".")
+
+
+def read_srt(path: Path) -> list[dict]:
+    raw = None
+    for encoding in ("utf-8-sig", "utf-8", "cp1252"):
+        try:
+            raw = path.read_text(encoding=encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    if raw is None:
+        raise RuntimeError("Não consegui identificar a codificação desse SRT.")
+
+    def seconds(value: str) -> float:
+        match = re.fullmatch(r"(\d+):(\d{2}):(\d{2})[,.](\d{3})", value.strip())
+        if not match:
+            raise ValueError(value)
+        h, m, s, ms = map(int, match.groups())
+        return h * 3600 + m * 60 + s + ms / 1000
+
+    captions = []
+    for block in re.split(r"\r?\n\s*\r?\n", raw.strip()):
+        lines = block.splitlines()
+        timing_index = next((i for i, line in enumerate(lines) if "-->" in line), -1)
+        if timing_index < 0:
+            continue
+        try:
+            start_raw, end_raw = lines[timing_index].split("-->", 1)
+            text = clean_lines("\n".join(lines[timing_index + 1:]))
+            if text:
+                captions.append({
+                    "start": seconds(start_raw),
+                    "end": seconds(end_raw),
+                    "text": text,
+                })
+        except (ValueError, IndexError):
+            continue
+    if not captions:
+        raise RuntimeError("Nenhum trecho de legenda válido foi encontrado nesse arquivo.")
+    return sorted(captions, key=lambda item: (item["start"], item["end"]))
 
 
 def wrap_caption(text: str, limit: int = 42) -> str:
@@ -250,6 +291,7 @@ class SubtitleOverlay(QGraphicsTextItem):
     moved = Signal()
     textEdited = Signal(str)
     editingFinished = Signal()
+    editingStarted = Signal()
 
     def __init__(self):
         super().__init__()
@@ -275,6 +317,7 @@ class SubtitleOverlay(QGraphicsTextItem):
     def start_editing(self):
         self.editing = True
         self._original_text = self.toPlainText()
+        self.editingStarted.emit()
         self.setTextInteractionFlags(Qt.TextInteractionFlag.TextEditorInteraction)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
         self.setCursor(Qt.CursorShape.IBeamCursor)
@@ -343,10 +386,58 @@ class VideoDropView(QGraphicsView):
             super().dropEvent(event)
 
 
+class ResetSlider(QSlider):
+    def __init__(self, orientation, reset_value: int, parent=None):
+        super().__init__(orientation, parent)
+        self.reset_value = reset_value
+
+    def mouseDoubleClickEvent(self, event):
+        self.setValue(self.reset_value)
+        event.accept()
+
+
+class SubtitleTable(QTableWidget):
+    def __init__(self, empty_text: str):
+        super().__init__(0, 4)
+        self.empty_text = empty_text
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self.rowCount() == 0:
+            painter = QPainter(self.viewport())
+            painter.setPen(QColor("#7e899e"))
+            font = painter.font()
+            font.setPointSize(12)
+            font.setWeight(QFont.Weight.DemiBold)
+            painter.setFont(font)
+            painter.drawText(
+                self.viewport().rect().adjusted(30, 30, -30, -30),
+                Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap,
+                self.empty_text,
+            )
+
+    def keyPressEvent(self, event):
+        if self.rowCount() and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            row = max(0, self.currentRow())
+            self.setCurrentCell(row, 3)
+            self.editItem(self.item(row, 3))
+            event.accept()
+            return
+        if self.rowCount() and event.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down):
+            delta = -1 if event.key() == Qt.Key.Key_Up else 1
+            row = max(0, min(self.rowCount() - 1, self.currentRow() + delta))
+            self.setCurrentCell(row, 0)
+            self.selectRow(row)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+
 class WaveformWidget(QWidget):
     seekRequested = Signal(int)
     segmentChanged = Signal(int)
     segmentSelected = Signal(int)
+    segmentEditStarted = Signal()
     viewChanged = Signal()
 
     def __init__(self):
@@ -508,6 +599,7 @@ class WaveformWidget(QWidget):
         time_at_mouse = self.x_to_time(event.position().x())
         index, mode = self.hit_segment(event.position().x(), event.position().y())
         if index >= 0:
+            self.segmentEditStarted.emit()
             self.drag_index, self.drag_mode = index, mode
             self.drag_origin = time_at_mouse
             c = self.captions[index]
@@ -571,6 +663,7 @@ class WaveformPanel(QWidget):
     seekRequested = Signal(int)
     segmentChanged = Signal(int)
     segmentSelected = Signal(int)
+    segmentEditStarted = Signal()
 
     def __init__(self):
         super().__init__()
@@ -586,6 +679,7 @@ class WaveformPanel(QWidget):
         self.waveform.seekRequested.connect(self.seekRequested)
         self.waveform.segmentChanged.connect(self.segmentChanged)
         self.waveform.segmentSelected.connect(self.segmentSelected)
+        self.waveform.segmentEditStarted.connect(self.segmentEditStarted)
         self.waveform.viewChanged.connect(self.sync_scrollbar)
         self.scrollbar.valueChanged.connect(self.on_scrollbar)
 
@@ -630,8 +724,10 @@ class CaptionTextEdit(QPlainTextEdit):
 
 class CaptionDelegate(QStyledItemDelegate):
     liveText = Signal(int, str)
+    editingStarted = Signal()
 
     def createEditor(self, parent, option, index):
+        self.editingStarted.emit()
         editor = CaptionTextEdit(parent)
         editor.setFrameShape(QFrame.Shape.NoFrame)
         editor.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -665,14 +761,15 @@ class SubtitleEditor(QWidget):
     seek = Signal(int)
     changed = Signal()
 
-    def __init__(self, language: str):
+    def __init__(self, language: str, empty_text: str):
         super().__init__()
         self.language = language
         self.captions: list[dict] = []
         self.loading = False
         self.following = False
+        self.undo_stack: list[list[dict]] = []
         root = QVBoxLayout(self)
-        self.table = QTableWidget(0, 4)
+        self.table = SubtitleTable(empty_text)
         self.table.setHorizontalHeaderLabels(["#", "Início", "Fim", "Texto"])
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
@@ -685,18 +782,35 @@ class SubtitleEditor(QWidget):
         self.table.setEditTriggers(
             QTableWidget.EditTrigger.DoubleClicked
             | QTableWidget.EditTrigger.EditKeyPressed
-            | QTableWidget.EditTrigger.SelectedClicked
         )
         self.caption_delegate = CaptionDelegate(self)
         self.table.setItemDelegateForColumn(3, self.caption_delegate)
         self.caption_delegate.liveText.connect(self.on_live_text)
+        self.caption_delegate.editingStarted.connect(self.push_undo)
         root.addWidget(self.table, 1)
         self.table.itemSelectionChanged.connect(self.on_selection)
         self.table.itemChanged.connect(self.on_item_changed)
 
     def set_captions(self, captions: list[dict]):
         self.captions = [dict(x) for x in captions]
+        self.undo_stack.clear()
         self.refresh()
+
+    def push_undo(self):
+        snapshot = deepcopy(self.captions)
+        if not self.undo_stack or self.undo_stack[-1] != snapshot:
+            self.undo_stack.append(snapshot)
+            if len(self.undo_stack) > 100:
+                del self.undo_stack[0]
+
+    def undo(self):
+        if not self.undo_stack:
+            return False
+        row = max(0, self.table.currentRow())
+        self.captions = self.undo_stack.pop()
+        self.refresh(row)
+        self.changed.emit()
+        return True
 
     def commit_text(self):
         row = self.table.currentRow()
@@ -785,6 +899,7 @@ class SubtitleEditor(QWidget):
         if len(rows) != 2 or rows[1] != rows[0] + 1:
             QMessageBox.information(self, APP_NAME, "Selecione exatamente dois trechos consecutivos.")
             return
+        self.push_undo()
         a, b = rows
         self.captions[a] = {
             "start": self.captions[a]["start"], "end": self.captions[b]["end"],
@@ -798,6 +913,7 @@ class SubtitleEditor(QWidget):
         rows = sorted({i.row() for i in self.table.selectedIndexes()}, reverse=True)
         if not rows:
             return
+        self.push_undo()
         for r in rows:
             if 0 <= r < len(self.captions):
                 del self.captions[r]
@@ -809,6 +925,7 @@ class SubtitleEditor(QWidget):
         left, right = clean_lines(left), clean_lines(right)
         if not (0 <= row < len(self.captions)) or not left or not right:
             return False
+        self.push_undo()
         c = self.captions[row]
         middle = (c["start"] + c["end"]) / 2
         self.captions[row:row + 1] = [
@@ -873,6 +990,7 @@ class MainWindow(QMainWindow):
         self.build()
         self.style()
         self.setAcceptDrops(True)
+        QApplication.instance().installEventFilter(self)
         for widget in self.findChildren(QWidget):
             widget.setAcceptDrops(True)
             widget.installEventFilter(self)
@@ -945,6 +1063,7 @@ class MainWindow(QMainWindow):
         player_layout.setContentsMargins(6, 6, 6, 6)
         player_layout.setSpacing(5)
         self.video_scene = QGraphicsScene(self)
+        self.video_scene.setSceneRect(0, 0, 1280, 720)
         self.video_view = VideoDropView(self.video_scene)
         self.video_view.setStyleSheet("background:#030405;border:0")
         self.video_view.setFrameShape(QFrame.Shape.NoFrame)
@@ -954,6 +1073,16 @@ class MainWindow(QMainWindow):
         self.video_scene.addItem(self.video_item)
         self.subtitle_overlay = SubtitleOverlay()
         self.video_scene.addItem(self.subtitle_overlay)
+        self.video_placeholder = QGraphicsTextItem("Arraste o vídeo para abrir")
+        self.video_placeholder.setFont(QFont("Segoe UI", 28, QFont.Weight.DemiBold))
+        self.video_placeholder.setDefaultTextColor(QColor("#778196"))
+        self.video_placeholder.setZValue(5)
+        placeholder_bounds = self.video_placeholder.boundingRect()
+        self.video_placeholder.setPos(
+            (1280 - placeholder_bounds.width()) / 2,
+            (720 - placeholder_bounds.height()) / 2,
+        )
+        self.video_scene.addItem(self.video_placeholder)
         self.subtitle_overlay.moved.connect(self.overlay_moved)
         self.subtitle_overlay.textEdited.connect(self.overlay_text_edited)
         self.subtitle_overlay.editingFinished.connect(self.overlay_editing_finished)
@@ -1013,7 +1142,7 @@ class MainWindow(QMainWindow):
         self.subtitle_x_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         self.subtitle_x_spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
         preview.addWidget(self.subtitle_x_spin)
-        self.subtitle_x = QSlider(Qt.Orientation.Horizontal)
+        self.subtitle_x = ResetSlider(Qt.Orientation.Horizontal, 50)
         self.subtitle_x.setRange(0, 100)
         self.subtitle_x.setValue(50)
         self.subtitle_x.setFixedWidth(150)
@@ -1070,8 +1199,10 @@ class MainWindow(QMainWindow):
         tv.setSpacing(5)
         tv.addWidget(QLabel("TRANSCRIÇÃO EM PORTUGUÊS", objectName="sectionTitle"))
         self.transcribe_btn = QPushButton("1. Transcrever para português", objectName="primary")
+        self.open_pt_btn = QPushButton("Abrir SRT em português")
         self.save_pt_btn = QPushButton("Salvar SRT em português")
         tv.addWidget(self.transcribe_btn)
+        tv.addWidget(self.open_pt_btn)
         tv.addWidget(self.save_pt_btn)
         av.addWidget(transcription)
         translation = QFrame(objectName="section")
@@ -1080,8 +1211,10 @@ class MainWindow(QMainWindow):
         ev.setSpacing(5)
         ev.addWidget(QLabel("TRADUÇÃO PARA INGLÊS", objectName="sectionTitle"))
         self.translate_btn = QPushButton("2. Traduzir para inglês", objectName="primary")
+        self.open_en_btn = QPushButton("Abrir SRT em inglês")
         self.save_en_btn = QPushButton("Salvar SRT em inglês")
         ev.addWidget(self.translate_btn)
+        ev.addWidget(self.open_en_btn)
         ev.addWidget(self.save_en_btn)
         av.addWidget(translation)
         av.addStretch()
@@ -1090,8 +1223,14 @@ class MainWindow(QMainWindow):
         top.setStretchFactor(1, 0)
         top.setSizes([920, 320])
         self.editors = QTabWidget()
-        self.pt_editor = SubtitleEditor("português")
-        self.en_editor = SubtitleEditor("inglês")
+        self.pt_editor = SubtitleEditor(
+            "português",
+            "Transcreva o vídeo para gerar a legenda em português\nou abra um arquivo SRT existente.",
+        )
+        self.en_editor = SubtitleEditor(
+            "inglês",
+            "Traduza o vídeo para gerar a legenda em inglês\nou abra um arquivo SRT existente.",
+        )
         self.editors.addTab(self.pt_editor, "Português")
         self.editors.addTab(self.en_editor, "English")
         corner = QWidget()
@@ -1132,6 +1271,8 @@ class MainWindow(QMainWindow):
         )
         self.transcribe_btn.clicked.connect(self.transcribe)
         self.translate_btn.clicked.connect(self.translate)
+        self.open_pt_btn.clicked.connect(lambda: self.open_subtitle("pt"))
+        self.open_en_btn.clicked.connect(lambda: self.open_subtitle("en"))
         self.save_pt_btn.clicked.connect(lambda: self.save("pt"))
         self.save_en_btn.clicked.connect(lambda: self.save("en"))
         self.merge_btn.clicked.connect(lambda: self.active_editor().merge())
@@ -1153,14 +1294,18 @@ class MainWindow(QMainWindow):
         self.waveform.seekRequested.connect(self.player.setPosition)
         self.waveform.segmentChanged.connect(self.waveform_segment_changed)
         self.waveform.segmentSelected.connect(self.waveform_segment_selected)
+        self.waveform.segmentEditStarted.connect(lambda: self.active_editor().push_undo())
         self.waveformReady.connect(self.waveform.set_waveform)
+        self.subtitle_overlay.editingStarted.connect(lambda: self.active_editor().push_undo())
         self.update_buttons()
 
     def update_buttons(self):
         has_video, has_pt, has_en = bool(self.video), bool(self.pt), bool(self.en)
         self.transcribe_btn.setEnabled(has_video)
+        self.open_pt_btn.setEnabled(not self.busy)
         self.save_pt_btn.setEnabled(has_pt)
         self.translate_btn.setEnabled(has_video)
+        self.open_en_btn.setEnabled(not self.busy)
         self.save_en_btn.setEnabled(has_en)
 
     def dragEnterEvent(self, e):
@@ -1186,6 +1331,16 @@ class MainWindow(QMainWindow):
             if QApplication.focusWidget() is editor.table:
                 editor.delete_selected()
                 return True
+        if (
+            event.type() == QEvent.Type.KeyPress
+            and event.key() == Qt.Key.Key_Z
+            and event.modifiers() & Qt.KeyboardModifier.ControlModifier
+        ):
+            focus = QApplication.focusWidget()
+            if isinstance(focus, QPlainTextEdit):
+                return False
+            self.trigger_undo()
+            return True
         if event.type() == QEvent.Type.DragEnter and event.mimeData().hasUrls():
             if not self.busy:
                 event.acceptProposedAction()
@@ -1307,12 +1462,45 @@ class MainWindow(QMainWindow):
             return
         self.active_editor().split()
 
+    def trigger_undo(self):
+        if self.subtitle_overlay.editing:
+            self.subtitle_overlay.document().undo()
+            return
+        if self.active_editor().undo():
+            self.status.setText("Ação desfeita")
+
     def choose_video(self):
         path, _ = QFileDialog.getOpenFileName(
             self, "Carregar vídeo", "", "Vídeos (*.mp4 *.mov *.mkv *.avi *.webm *.m4v *.wmv)"
         )
         if path:
             self.load_video(Path(path))
+
+    def open_subtitle(self, language: str):
+        label = "português" if language == "pt" else "inglês"
+        path, _ = QFileDialog.getOpenFileName(
+            self, f"Abrir legenda em {label}", "", "SubRip (*.srt)"
+        )
+        if not path:
+            return
+        try:
+            captions = read_srt(Path(path))
+        except Exception as exc:
+            QMessageBox.critical(self, APP_NAME, str(exc))
+            return
+        editor = self.pt_editor if language == "pt" else self.en_editor
+        editor.set_captions(captions)
+        if language == "pt":
+            self.pt = editor.captions
+            self.show_editor(0)
+        else:
+            self.en = editor.captions
+            self.show_editor(1)
+        if not self.video:
+            self.waveform.set_waveform([], max(c["end"] for c in captions))
+        self.waveform.set_captions(editor.captions)
+        self.status.setText(f"Legenda em {label} carregada: {Path(path).name}")
+        self.update_buttons()
 
     def load_video(self, path: Path):
         if self.busy:
@@ -1321,6 +1509,10 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, APP_NAME, "Selecione um arquivo de vídeo válido.")
             return
         self.video, self.pt, self.en = path, [], []
+        self.pt_editor.set_captions([])
+        self.en_editor.set_captions([])
+        self.show_editor(0)
+        self.video_placeholder.setVisible(False)
         self.file_label.setText(f"<b>{path.name}</b><br>{path.stat().st_size / 1048576:.1f} MB")
         self.loading_first_frame = True
         self.player.setSource(QUrl.fromLocalFile(str(path)))
@@ -1448,8 +1640,8 @@ class MainWindow(QMainWindow):
         self.busy = busy
         if busy:
             for button in (
-                self.transcribe_btn, self.save_pt_btn,
-                self.translate_btn, self.save_en_btn,
+                self.transcribe_btn, self.open_pt_btn, self.save_pt_btn,
+                self.translate_btn, self.open_en_btn, self.save_en_btn,
             ):
                 button.setEnabled(False)
         else:

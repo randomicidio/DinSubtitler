@@ -26,6 +26,7 @@ As duas faixas ficam disponíveis em abas separadas. Você pode editar, juntar, 
 - Aceleração por GPU NVIDIA, com fallback para CPU
 - Player de vídeo com prévia das legendas
 - Edição de texto diretamente na lista ou sobre o vídeo
+- Importação de arquivos SRT em português ou inglês para continuar uma edição
 - Waveform navegável e sincronizada com a reprodução
 - Ajuste visual do início, fim e posição de cada trecho
 - Controle de fonte, tamanho e posição da legenda na prévia
@@ -44,6 +45,7 @@ O modelo Whisper será baixado automaticamente na primeira utilização e ficar�
 
 1. Arraste um vídeo para a janela ou clique em **Carregar vídeo**.
 2. Escolha **Transcrever para português**, **Traduzir para inglês** ou execute os dois processos.
+   Você também pode abrir um SRT existente diretamente na seção do idioma.
 3. Abra a aba do idioma que deseja revisar.
 4. Edite o texto e os tempos livremente.
 5. Salve o SRT correspondente ao idioma.
@@ -51,12 +53,16 @@ O modelo Whisper será baixado automaticamente na primeira utilização e ficar�
 ## Controles do editor
 
 - `Espaço`: reproduzir ou pausar o vídeo
+- `Ctrl + Z`: desfazer a última ação na faixa selecionada
+- `↑` / `↓`: navegar entre os trechos sem entrar no modo de edição
+- `Enter` ou duplo clique: editar o texto do trecho selecionado
 - `F4`: juntar dois trechos consecutivos selecionados
 - `F5`: separar um trecho na posição do cursor
 - `Delete`: excluir os trechos selecionados
 - `Shift + Enter`: inserir uma quebra de linha manual
 - Rodinha do mouse sobre a waveform: aplicar zoom
 - `Alt + rodinha`: navegar horizontalmente pela waveform
+- Duplo clique no controle X: restaurar a posição horizontal para 50%
 
 Na waveform:
 
