@@ -43,7 +43,7 @@ O modelo Whisper será baixado automaticamente na primeira utilização e ficar�
 
 ## Fluxo de uso
 
-1. Arraste um vídeo para a janela ou clique em **Carregar vídeo**.
+1. Arraste um vídeo para qualquer região da janela ou clique em **Carregar vídeo**.
 2. Escolha **Transcrever para português**, **Traduzir para inglês** ou execute os dois processos.
    Você também pode abrir um SRT existente diretamente na seção do idioma.
 3. Abra a aba do idioma que deseja revisar.
@@ -54,6 +54,7 @@ O modelo Whisper será baixado automaticamente na primeira utilização e ficar�
 
 - `Espaço`: reproduzir ou pausar o vídeo
 - `Ctrl + Z`: desfazer a última ação na faixa selecionada
+- `Ctrl + Shift + Z`: refazer a última ação desfeita
 - `↑` / `↓`: navegar entre os trechos sem entrar no modo de edição
 - `Enter` ou duplo clique: editar o texto do trecho selecionado
 - `F4`: juntar dois trechos consecutivos selecionados
@@ -61,15 +62,16 @@ O modelo Whisper será baixado automaticamente na primeira utilização e ficar�
 - `Delete`: excluir os trechos selecionados
 - `Shift + Enter`: inserir uma quebra de linha manual
 - Rodinha do mouse sobre a waveform: aplicar zoom
-- `Alt + rodinha`: navegar horizontalmente pela waveform
+- Arrastar com a rodinha pressionada: navegar horizontalmente pela waveform
 - Duplo clique no controle X: restaurar a posição horizontal para 50%
 
 Na waveform:
 
-- Arraste a linha de reprodução para navegar pelo vídeo.
-- Arraste sobre uma área vazia para selecionar vários blocos por intervalo.
+- Clique ou arraste com o botão esquerdo numa área vazia para navegar pelo vídeo.
+- Arraste com o botão direito sobre uma área vazia para selecionar vários blocos.
 - Segure `Ctrl` e arraste em uma área vazia para desenhar um novo bloco.
 - Selecione um ou mais blocos, segure `Alt` e arraste para criar uma cópia.
+- Dê duplo clique num bloco para editar seu texto na lista.
 - Arraste um bloco para mover o trecho inteiro.
 - Arraste as bordas para ajustar o início ou o fim.
 - Arraste a divisão entre blocos adjacentes para alterar os dois tempos simultaneamente.

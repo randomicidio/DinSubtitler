@@ -360,7 +360,7 @@ class SubtitleOverlay(QGraphicsTextItem):
 
 
 class VideoDropView(QGraphicsView):
-    videoDropped = Signal(str)
+    fileDropped = Signal(str)
 
     def __init__(self, scene):
         super().__init__(scene)
@@ -382,7 +382,7 @@ class VideoDropView(QGraphicsView):
     def dropEvent(self, event):
         urls = event.mimeData().urls()
         if urls:
-            self.videoDropped.emit(urls[0].toLocalFile())
+            self.fileDropped.emit(urls[0].toLocalFile())
             event.acceptProposedAction()
         else:
             super().dropEvent(event)
@@ -442,6 +442,7 @@ class WaveformWidget(QWidget):
     segmentEditStarted = Signal()
     selectionChanged = Signal(object)
     structureChanged = Signal(object)
+    segmentEditRequested = Signal(int)
     viewChanged = Signal()
 
     def __init__(self):
@@ -461,14 +462,18 @@ class WaveformWidget(QWidget):
         self.drag_origin = 0.0
         self.original = None
         self.selected_indices: set[int] = set()
+        self.editing_index = -1
         self.rubber_start = None
         self.rubber_end = None
         self.preview_blocks: list[dict] = []
         self.press_x = 0.0
+        self.pan_origin_x = 0.0
+        self.pan_origin_start = 0.0
         self.pencil_cursor = self._make_pencil_cursor()
         self.setToolTip(
-            "Arraste vazio: selecionar  •  Ctrl + arrastar: criar bloco  •  "
-            "Alt + arrastar: duplicar  •  Rodinha: zoom  •  Alt + rodinha: navegar"
+            "Esquerdo: reprodução  •  Direito: selecionar  •  "
+            "Ctrl: criar  •  Alt: duplicar  •  Rodinha: zoom  •  "
+            "Arrastar rodinha: navegar"
         )
 
     def set_waveform(self, peaks: list[float], duration: float):
@@ -495,6 +500,10 @@ class WaveformWidget(QWidget):
         self.selected_indices = {
             int(i) for i in indices if 0 <= int(i) < len(self.captions)
         }
+        self.update()
+
+    def set_editing_index(self, index: int):
+        self.editing_index = index if 0 <= index < len(self.captions) else -1
         self.update()
 
     @staticmethod
@@ -578,10 +587,10 @@ class WaveformWidget(QWidget):
             x1, x2 = self.time_to_x(c["start"]), self.time_to_x(c["end"])
             if x2 < 0 or x1 > self.width():
                 continue
-            if i == self.drag_index:
-                color = QColor(255, 66, 109, 235)
-            elif i in self.selected_indices:
+            if i == self.editing_index:
                 color = QColor(65, 145, 255, 220)
+            elif i == self.drag_index or i in self.selected_indices:
+                color = QColor(255, 66, 109, 235)
             else:
                 color = QColor(147, 64, 91, 205)
             p.setBrush(QBrush(color))
@@ -650,7 +659,18 @@ class WaveformWidget(QWidget):
         index, mode = self.hit_segment(event.position().x(), event.position().y())
         modifiers = event.modifiers()
         self.press_x = event.position().x()
-        if (
+        if event.button() == Qt.MouseButton.MiddleButton:
+            self.drag_mode = "pan"
+            self.pan_origin_x = event.position().x()
+            self.pan_origin_start = self.view_start
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        elif event.button() == Qt.MouseButton.RightButton and index < 0:
+            self.drag_mode = "rubber"
+            self.rubber_start = time_at_mouse
+            self.rubber_end = time_at_mouse
+        elif (
+            event.button() == Qt.MouseButton.LeftButton
+            and
             modifiers & Qt.KeyboardModifier.ControlModifier
             and index < 0
         ):
@@ -663,6 +683,8 @@ class WaveformWidget(QWidget):
                 "text": "",
             }]
         elif (
+            event.button() == Qt.MouseButton.LeftButton
+            and
             modifiers & Qt.KeyboardModifier.AltModifier
             and index >= 0
             and mode != "boundary"
@@ -677,7 +699,7 @@ class WaveformWidget(QWidget):
             self.original = [deepcopy(self.captions[i]) for i in indices]
             self.preview_blocks = deepcopy(self.original)
             self.drag_index = index
-        elif index >= 0:
+        elif event.button() == Qt.MouseButton.LeftButton and index >= 0:
             self.segmentEditStarted.emit()
             self.drag_index, self.drag_mode = index, mode
             self.drag_origin = time_at_mouse
@@ -689,10 +711,12 @@ class WaveformWidget(QWidget):
             self.segmentSelected.emit(index)
             seek_time = c["end"] if mode == "boundary" else c["start"]
             self.seekRequested.emit(round(seek_time * 1000))
-        else:
-            self.drag_mode = "rubber"
-            self.rubber_start = time_at_mouse
-            self.rubber_end = time_at_mouse
+        elif event.button() == Qt.MouseButton.LeftButton:
+            self.drag_mode = "playhead"
+            self.position = time_at_mouse
+            self.selected_indices.clear()
+            self.selectionChanged.emit([])
+            self.seekRequested.emit(round(self.position * 1000))
         self.update()
 
     CURSOR_BY_MODE = {
@@ -719,7 +743,19 @@ class WaveformWidget(QWidget):
                 self.setCursor(self.CURSOR_BY_MODE.get(mode, Qt.CursorShape.ArrowCursor))
             return
         now = self.x_to_time(event.position().x())
-        if self.drag_mode == "rubber":
+        if self.drag_mode == "pan":
+            seconds_per_pixel = self.visible_duration() / max(1, self.width())
+            self.view_start = self.pan_origin_start - (
+                event.position().x() - self.pan_origin_x
+            ) * seconds_per_pixel
+            self.view_start = max(
+                0.0, min(self.view_start, self.duration - self.visible_duration())
+            )
+            self.viewChanged.emit()
+        elif self.drag_mode == "playhead":
+            self.position = now
+            self.seekRequested.emit(round(now * 1000))
+        elif self.drag_mode == "rubber":
             self.rubber_end = now
         elif self.drag_mode == "create":
             self.preview_blocks[0]["start"] = min(self.drag_origin, now)
@@ -762,19 +798,12 @@ class WaveformWidget(QWidget):
 
     def mouseReleaseEvent(self, event):
         if self.drag_mode == "rubber":
-            moved = abs(event.position().x() - self.press_x) >= 4
-            if moved:
-                start, end = sorted((self.rubber_start, self.rubber_end))
-                self.selected_indices = {
-                    i for i, c in enumerate(self.captions)
-                    if c["end"] > start and c["start"] < end
-                }
-                self.selectionChanged.emit(sorted(self.selected_indices))
-            else:
-                self.position = self.x_to_time(event.position().x())
-                self.selected_indices.clear()
-                self.selectionChanged.emit([])
-                self.seekRequested.emit(round(self.position * 1000))
+            start, end = sorted((self.rubber_start, self.rubber_end))
+            self.selected_indices = {
+                i for i, c in enumerate(self.captions)
+                if c["end"] > start and c["start"] < end
+            }
+            self.selectionChanged.emit(sorted(self.selected_indices))
         elif self.drag_mode == "create":
             block = self.preview_blocks[0]
             if block["end"] - block["start"] >= self.MIN_GAP:
@@ -791,7 +820,17 @@ class WaveformWidget(QWidget):
         self.rubber_start = None
         self.rubber_end = None
         self.preview_blocks = []
+        self.unsetCursor()
         self.update()
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            index, _mode = self.hit_segment(event.position().x(), event.position().y())
+            if index >= 0:
+                self.segmentEditRequested.emit(index)
+                event.accept()
+                return
+        super().mouseDoubleClickEvent(event)
 
     def _insert_with_crop(self, new_blocks: list[dict]):
         existing = list(self.captions)
@@ -847,6 +886,7 @@ class WaveformPanel(QWidget):
     segmentEditStarted = Signal()
     selectionChanged = Signal(object)
     structureChanged = Signal(object)
+    segmentEditRequested = Signal(int)
 
     def __init__(self):
         super().__init__()
@@ -865,6 +905,7 @@ class WaveformPanel(QWidget):
         self.waveform.segmentEditStarted.connect(self.segmentEditStarted)
         self.waveform.selectionChanged.connect(self.selectionChanged)
         self.waveform.structureChanged.connect(self.structureChanged)
+        self.waveform.segmentEditRequested.connect(self.segmentEditRequested)
         self.waveform.viewChanged.connect(self.sync_scrollbar)
         self.scrollbar.valueChanged.connect(self.on_scrollbar)
 
@@ -909,10 +950,10 @@ class CaptionTextEdit(QPlainTextEdit):
 
 class CaptionDelegate(QStyledItemDelegate):
     liveText = Signal(int, str)
-    editingStarted = Signal()
+    editingStarted = Signal(int)
 
     def createEditor(self, parent, option, index):
-        self.editingStarted.emit()
+        self.editingStarted.emit(index.row())
         editor = CaptionTextEdit(parent)
         editor.setFrameShape(QFrame.Shape.NoFrame)
         editor.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -946,6 +987,8 @@ class SubtitleEditor(QWidget):
     seek = Signal(int)
     changed = Signal()
     selectionChanged = Signal(object)
+    editingStarted = Signal(int)
+    editingFinished = Signal()
 
     def __init__(self, language: str, empty_text: str):
         super().__init__()
@@ -954,6 +997,7 @@ class SubtitleEditor(QWidget):
         self.loading = False
         self.following = False
         self.undo_stack: list[list[dict]] = []
+        self.redo_stack: list[list[dict]] = []
         root = QVBoxLayout(self)
         self.table = SubtitleTable(empty_text)
         self.table.setHorizontalHeaderLabels(["#", "Início", "Fim", "Texto"])
@@ -972,7 +1016,10 @@ class SubtitleEditor(QWidget):
         self.caption_delegate = CaptionDelegate(self)
         self.table.setItemDelegateForColumn(3, self.caption_delegate)
         self.caption_delegate.liveText.connect(self.on_live_text)
-        self.caption_delegate.editingStarted.connect(self.push_undo)
+        self.caption_delegate.editingStarted.connect(self.begin_editing)
+        self.caption_delegate.closeEditor.connect(
+            lambda *_args: self.editingFinished.emit()
+        )
         root.addWidget(self.table, 1)
         self.table.itemSelectionChanged.connect(self.on_selection)
         self.table.itemChanged.connect(self.on_item_changed)
@@ -980,12 +1027,14 @@ class SubtitleEditor(QWidget):
     def set_captions(self, captions: list[dict]):
         self.captions = [dict(x) for x in captions]
         self.undo_stack.clear()
+        self.redo_stack.clear()
         self.refresh()
 
     def push_undo(self):
         snapshot = deepcopy(self.captions)
         if not self.undo_stack or self.undo_stack[-1] != snapshot:
             self.undo_stack.append(snapshot)
+            self.redo_stack.clear()
             if len(self.undo_stack) > 100:
                 del self.undo_stack[0]
 
@@ -993,10 +1042,32 @@ class SubtitleEditor(QWidget):
         if not self.undo_stack:
             return False
         row = max(0, self.table.currentRow())
+        self.redo_stack.append(deepcopy(self.captions))
         self.captions = self.undo_stack.pop()
         self.refresh(row)
         self.changed.emit()
         return True
+
+    def redo(self):
+        if not self.redo_stack:
+            return False
+        row = max(0, self.table.currentRow())
+        self.undo_stack.append(deepcopy(self.captions))
+        self.captions = self.redo_stack.pop()
+        self.refresh(row)
+        self.changed.emit()
+        return True
+
+    def begin_editing(self, row: int):
+        self.push_undo()
+        self.editingStarted.emit(row)
+
+    def edit_segment(self, row: int):
+        if not (0 <= row < len(self.captions)):
+            return
+        self.select_segment(row)
+        self.table.setCurrentCell(row, 3)
+        self.table.editItem(self.table.item(row, 3))
 
     def commit_text(self):
         row = self.table.currentRow()
@@ -1500,7 +1571,7 @@ class MainWindow(QMainWindow):
         self.font_size.valueChanged.connect(lambda _v: self.update_subtitle_preview())
         self.subtitle_x.valueChanged.connect(lambda _v: self.position_overlay())
         self.subtitle_y.valueChanged.connect(lambda _v: self.position_overlay())
-        self.video_view.videoDropped.connect(lambda path: self.load_video(Path(path)))
+        self.video_view.fileDropped.connect(lambda path: self.handle_dropped_path(Path(path)))
         self.waveform.seekRequested.connect(self.player.setPosition)
         self.waveform.segmentChanged.connect(self.waveform_segment_changed)
         self.waveform.segmentSelected.connect(self.waveform_segment_selected)
@@ -1509,8 +1580,14 @@ class MainWindow(QMainWindow):
             lambda rows: self.active_editor().select_segments(rows)
         )
         self.waveform.structureChanged.connect(self.waveform_structure_changed)
+        self.waveform.segmentEditRequested.connect(self.waveform_edit_requested)
         self.waveformReady.connect(self.waveform.set_waveform)
-        self.subtitle_overlay.editingStarted.connect(lambda: self.active_editor().push_undo())
+        for editor in (self.pt_editor, self.en_editor):
+            editor.editingStarted.connect(
+                lambda row, source=editor: self.subtitle_editing_started(source, row)
+            )
+            editor.editingFinished.connect(self.subtitle_editing_finished)
+        self.subtitle_overlay.editingStarted.connect(self.overlay_editing_started)
         self.update_buttons()
 
     def update_buttons(self):
@@ -1526,10 +1603,14 @@ class MainWindow(QMainWindow):
         if e.mimeData().hasUrls() and not self.busy:
             e.acceptProposedAction()
 
+    def dragMoveEvent(self, e):
+        if e.mimeData().hasUrls() and not self.busy:
+            e.acceptProposedAction()
+
     def dropEvent(self, e):
         paths = [Path(x.toLocalFile()) for x in e.mimeData().urls()]
         if paths:
-            self.load_video(paths[0])
+            self.handle_dropped_path(paths[0])
             e.acceptProposedAction()
 
     def eventFilter(self, watched, event):
@@ -1553,9 +1634,12 @@ class MainWindow(QMainWindow):
             focus = QApplication.focusWidget()
             if isinstance(focus, QPlainTextEdit):
                 return False
-            self.trigger_undo()
+            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                self.trigger_redo()
+            else:
+                self.trigger_undo()
             return True
-        if event.type() == QEvent.Type.DragEnter and event.mimeData().hasUrls():
+        if event.type() in (QEvent.Type.DragEnter, QEvent.Type.DragMove) and event.mimeData().hasUrls():
             if not self.busy:
                 event.acceptProposedAction()
             return True
@@ -1563,7 +1647,7 @@ class MainWindow(QMainWindow):
             if not self.busy:
                 paths = [Path(x.toLocalFile()) for x in event.mimeData().urls()]
                 if paths:
-                    self.load_video(paths[0])
+                    self.handle_dropped_path(paths[0])
                     event.acceptProposedAction()
             return True
         return super().eventFilter(watched, event)
@@ -1661,7 +1745,13 @@ class MainWindow(QMainWindow):
     def overlay_editing_finished(self):
         editor = self.active_editor()
         editor.commit_row_text(editor.table.currentRow())
+        self.waveform.waveform.set_editing_index(-1)
         self.update_subtitle_preview()
+
+    def overlay_editing_started(self):
+        editor = self.active_editor()
+        editor.push_undo()
+        self.waveform.waveform.set_editing_index(editor.table.currentRow())
 
     def trigger_split(self):
         if self.subtitle_overlay.editing:
@@ -1683,6 +1773,13 @@ class MainWindow(QMainWindow):
         if self.active_editor().undo():
             self.status.setText("Ação desfeita")
 
+    def trigger_redo(self):
+        if self.subtitle_overlay.editing:
+            self.subtitle_overlay.document().redo()
+            return
+        if self.active_editor().redo():
+            self.status.setText("Ação refeita")
+
     def choose_video(self):
         path, _ = QFileDialog.getOpenFileName(
             self, "Carregar vídeo", "", "Vídeos (*.mp4 *.mov *.mkv *.avi *.webm *.m4v *.wmv)"
@@ -1697,8 +1794,12 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
+        self.load_subtitle_path(Path(path), language)
+
+    def load_subtitle_path(self, path: Path, language: str):
+        label = "português" if language == "pt" else "inglês"
         try:
-            captions = read_srt(Path(path))
+            captions = read_srt(path)
         except Exception as exc:
             QMessageBox.critical(self, APP_NAME, str(exc))
             return
@@ -1715,6 +1816,19 @@ class MainWindow(QMainWindow):
         self.waveform.set_captions(editor.captions)
         self.status.setText(f"Legenda em {label} carregada: {Path(path).name}")
         self.update_buttons()
+
+    def handle_dropped_path(self, path: Path):
+        if self.busy:
+            return
+        if path.suffix.lower() == ".srt":
+            language = "pt" if self.editors.currentIndex() == 0 else "en"
+            self.load_subtitle_path(path, language)
+        elif path.suffix.lower() in VIDEO_TYPES:
+            self.load_video(path)
+        else:
+            QMessageBox.warning(
+                self, APP_NAME, "Solte um arquivo de vídeo ou uma legenda SRT."
+            )
 
     def load_video(self, path: Path):
         if self.busy:
@@ -1804,6 +1918,13 @@ class MainWindow(QMainWindow):
         if editor is self.active_editor():
             self.waveform.waveform.set_selected(rows)
 
+    def subtitle_editing_started(self, editor, row: int):
+        if editor is self.active_editor():
+            self.waveform.waveform.set_editing_index(row)
+
+    def subtitle_editing_finished(self):
+        self.waveform.waveform.set_editing_index(-1)
+
     def waveform_segment_changed(self, row: int):
         editor = self.active_editor()
         editor.update_timing(row)
@@ -1815,6 +1936,9 @@ class MainWindow(QMainWindow):
 
     def waveform_segment_selected(self, row: int):
         self.active_editor().select_segment(row)
+
+    def waveform_edit_requested(self, row: int):
+        self.active_editor().edit_segment(row)
 
     def waveform_structure_changed(self, selected_rows):
         editor = self.active_editor()
