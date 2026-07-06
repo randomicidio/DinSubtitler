@@ -279,6 +279,80 @@ def mark_isolated_words(words: list[dict], gap_seconds: float = 0.5) -> None:
         previous_end = word["end"]
 
 
+_similarity_cache: dict = {}
+
+
+def token_similarity(a: str, b: str) -> float:
+    if a == b:
+        return 1.0
+    key = (a, b) if a <= b else (b, a)
+    value = _similarity_cache.get(key)
+    if value is None:
+        value = difflib.SequenceMatcher(None, a, b).ratio()
+        _similarity_cache[key] = value
+    return value
+
+
+ALIGN_MATCH_MIN = 0.55
+ALIGN_GAP = -0.18
+
+
+def match_lyric_tokens(line_tokens: list, heard: list[str]) -> list[tuple[int, int, float]]:
+    """Alinhamento global fuzzy entre a letra e o que o Whisper ouviu.
+
+    Programação dinâmica semi-global (pontas livres): a sequência ouvida
+    encontra seu melhor encaixe dentro da letra inteira, com crédito
+    parcial para palavras parecidas — uma palavra mal ouvida não perde a
+    âncora, e um refrão repetido cai na repetição certa porque o encaixe
+    é decidido pela música como um todo, não bloco a bloco.
+    Retorna (índice na letra, índice ouvido, similaridade) dos casamentos.
+    """
+    n, m = len(line_tokens), len(heard)
+    if not n or not m:
+        return []
+    scores = [[0.0] * (m + 1) for _ in range(n + 1)]
+    moves = [[0] * (m + 1) for _ in range(n + 1)]  # 1=casa, 2=pula letra, 3=pula ouvido
+    for i in range(1, n + 1):
+        token = line_tokens[i - 1][0]
+        row, prev_row = scores[i], scores[i - 1]
+        move_row = moves[i]
+        for j in range(1, m + 1):
+            sim = token_similarity(token, heard[j - 1])
+            gain = sim if sim >= ALIGN_MATCH_MIN else -0.4
+            best, move = prev_row[j - 1] + gain, 1
+            up = prev_row[j] + ALIGN_GAP
+            if up > best:
+                best, move = up, 2
+            left = row[j - 1] + ALIGN_GAP
+            if left > best:
+                best, move = left, 3
+            if best < 0.0:
+                best, move = 0.0, 0
+            row[j] = best
+            move_row[j] = move
+    # Alinhamento local: o melhor encaixe pode terminar em qualquer célula.
+    i, j, best = 0, 0, 0.0
+    for row_index in range(1, n + 1):
+        row = scores[row_index]
+        for col_index in range(1, m + 1):
+            if row[col_index] > best:
+                i, j, best = row_index, col_index, row[col_index]
+    matches = []
+    while i > 0 and j > 0 and moves[i][j]:
+        move = moves[i][j]
+        if move == 1:
+            sim = token_similarity(line_tokens[i - 1][0], heard[j - 1])
+            if sim >= ALIGN_MATCH_MIN:
+                matches.append((i - 1, j - 1, sim))
+            i, j = i - 1, j - 1
+        elif move == 2:
+            i -= 1
+        else:
+            j -= 1
+    matches.reverse()
+    return matches
+
+
 def align_lyrics_to_words(lines: list[str], words: list[dict]) -> list[dict]:
     line_tokens = []
     token_counts = [0] * len(lines)
@@ -287,45 +361,49 @@ def align_lyrics_to_words(lines: list[str], words: list[dict]) -> list[dict]:
             if token:
                 line_tokens.append((token, index))
                 token_counts[index] += 1
-    heard = [normalize_token(w["word"]) for w in words]
-    matcher = difflib.SequenceMatcher(
-        None, [t for t, _ in line_tokens], heard, autojunk=False
-    )
+    kept = [(normalize_token(w["word"]), i) for i, w in enumerate(words)]
+    kept = [(token, i) for token, i in kept if token]
+    heard = [token for token, _ in kept]
     spans: list[list[float] | None] = [None] * len(lines)
-    matched_counts = [0] * len(lines)
-    for block in matcher.get_matching_blocks():
-        for offset in range(block.size):
-            _, line_index = line_tokens[block.a + offset]
-            word = words[block.b + offset]
-            matched_counts[line_index] += 1
-            raw_start, raw_end = word["start"], word["end"]
-            # Depois de um silêncio, o Whisper costuma esticar a palavra para
-            # trás, cobrindo o instrumental; sem o limite, o verso apareceria
-            # cedo demais e ainda engoliria o espaço do verso anterior.
-            back_limit = 1.0 if word.get("isolated_start") else 3.0
-            start = max(raw_start, raw_end - back_limit)
-            # Uma nota segurada (melisma) pode fazer o Whisper grudar tempo
-            # demais numa única palavra; sem o teto, ela invade o verso
-            # seguinte em vez de só esticar o próprio verso.
-            end = min(raw_end, raw_start + WORD_MAX_HOLD_SECONDS)
-            span = spans[line_index]
-            if span is None:
-                spans[line_index] = [start, end]
-            else:
-                span[0] = min(span[0], start)
-                span[1] = max(span[1], end)
-    # Uma palavra solta em comum não prova que o verso foi cantado ali:
-    # só vale como âncora o verso com boa parte das palavras reconhecida.
+    matched_weights = [0.0] * len(lines)
+    for a, b, sim in match_lyric_tokens(line_tokens, heard):
+        _, line_index = line_tokens[a]
+        word = words[kept[b][1]]
+        matched_weights[line_index] += sim
+        raw_start, raw_end = word["start"], word["end"]
+        # Depois de um silêncio, o Whisper costuma esticar a palavra para
+        # trás, cobrindo o instrumental; sem o limite, o verso apareceria
+        # cedo demais e ainda engoliria o espaço do verso anterior.
+        back_limit = 1.0 if word.get("isolated_start") else 3.0
+        start = max(raw_start, raw_end - back_limit)
+        # Uma nota segurada (melisma) pode fazer o Whisper grudar tempo
+        # demais numa única palavra; sem o teto, ela invade o verso
+        # seguinte em vez de só esticar o próprio verso.
+        end = min(raw_end, raw_start + WORD_MAX_HOLD_SECONDS)
+        span = spans[line_index]
+        if span is None:
+            spans[line_index] = [start, end]
+        else:
+            span[0] = min(span[0], start)
+            span[1] = max(span[1], end)
+    # Uma palavra solta parecida não prova que o verso foi cantado ali: só
+    # vale como âncora o verso com peso somado de boa parte das palavras.
     for index, span in enumerate(spans):
         if span is None:
             continue
-        required = max(1, round(token_counts[index] * 0.4))
-        if matched_counts[index] < required:
+        required = max(0.9, token_counts[index] * 0.35)
+        if matched_weights[index] < required:
             spans[index] = None
     return spans
 
 
 LYRIC_MIN_LINE_SECONDS = 0.4
+
+
+def syllable_weight(line: str) -> int:
+    plain = unicodedata.normalize("NFD", line.lower())
+    plain = "".join(c for c in plain if not unicodedata.combining(c))
+    return max(1, len(re.findall(r"[aeiouy]+", plain)))
 
 
 def envelope_thresholds(env):
@@ -376,8 +454,9 @@ def captions_from_lyrics(lines: list[str], spans: list, total: float, env=None) 
     filled = {i: list(spans[i]) for i in anchors}
 
     def distribute(indexes, begin, finish):
-        # Verso com mais palavras recebe uma fatia maior do intervalo.
-        weights = [max(1, len(lines[i].split())) for i in indexes]
+        # No canto, o tempo acompanha as sílabas (cada uma pode virar uma
+        # nota), então versos com mais sílabas ganham fatias maiores.
+        weights = [syllable_weight(lines[i]) for i in indexes]
         scale = (finish - begin) / sum(weights)
         cursor = begin
         for i, weight in zip(indexes, weights):
@@ -659,18 +738,45 @@ def refine_lyric_starts(captions: list[dict], env) -> list[dict]:
     return captions
 
 
-def extend_lyric_ends(captions: list[dict], total: float) -> list[dict]:
+def voiced_run_end(env, begin: float, limit: float) -> float:
+    """Até onde a voz continua soando a partir de `begin` (tolera respiros curtos)."""
+    if env is None or not len(env):
+        return begin
+    thresholds = envelope_thresholds(env)
+    if not thresholds:
+        return begin
+    _, loud = thresholds
+    hop = LYRIC_ENVELOPE_HOP
+    position = int(begin / hop)
+    stop = min(int(limit / hop), len(env))
+    silent_run, last_voiced = 0, position
+    while position < stop:
+        if env[position] >= loud:
+            silent_run = 0
+            last_voiced = position
+        else:
+            silent_run += 1
+            if silent_run > 30:  # 0,3s de silêncio encerra a nota
+                break
+        position += 1
+    return max(begin, last_voiced * hop)
+
+
+def extend_lyric_ends(captions: list[dict], total: float, env=None) -> list[dict]:
     # Notas sustentadas duram mais do que o Whisper marca: cada verso
-    # permanece na tela até o próximo começar (estilo karaokê).
+    # permanece na tela até o próximo começar (estilo karaokê) e, em
+    # pausas maiores, segue o envelope enquanto a voz continuar soando.
     for current, following in zip(captions, captions[1:]):
         gap = following["start"] - current["end"]
         if 0 < gap <= 2.0:
             current["end"] = following["start"]
         elif gap > 2.0:
-            current["end"] = round(current["end"] + 0.8, 3)
+            held = voiced_run_end(env, current["end"], following["start"] - 0.2)
+            current["end"] = round(max(current["end"] + 0.8, held), 3)
     if captions:
         last = captions[-1]
-        last["end"] = round(min(last["end"] + 1.2, max(total, last["end"])), 3)
+        held = voiced_run_end(env, last["end"], max(total, last["end"]))
+        last["end"] = round(min(max(last["end"] + 1.2, held), max(total, last["end"])), 3)
     return captions
 
 
@@ -882,7 +988,7 @@ class Engine:
                 spans = merge_spans(spans, align_lyrics_to_words(lines, support))
         captions = captions_from_lyrics(lines, spans, total, env)
         captions = refine_lyric_starts(captions, env)
-        captions = extend_lyric_ends(captions, total)
+        captions = extend_lyric_ends(captions, total, env)
         self.emit(f"{len(captions)} versos sincronizados.", 100)
         return captions, saved_vocals_path
 
