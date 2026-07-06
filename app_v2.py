@@ -393,6 +393,22 @@ def captions_from_lyrics(lines: list[str], spans: list, total: float, env=None) 
             begin, finish = filled[prev][1], filled[nxt][0]
             gap = max(finish - begin, missing * 0.6)
         distribute(range(prev + 1, nxt), begin, begin + gap)
+
+    # Versos antes da primeira âncora (e depois da última) normalmente não
+    # estão no vídeo — mas se ali existe voz cantada, eles são resgatados,
+    # tantos quantos couberem no trecho com voz.
+    first = anchors[0]
+    if first > 0:
+        window = voiced_window(env, max(0.0, filled[first][0] - 20.0), filled[first][0] - 0.05)
+        if window:
+            count = min(first, max(1, int((window[1] - window[0]) / 1.5)))
+            distribute(range(first - count, first), *window)
+    last = anchors[-1]
+    if last < len(lines) - 1:
+        window = voiced_window(env, filled[last][1] + 0.05, min(total, filled[last][1] + 20.0))
+        if window:
+            count = min(len(lines) - 1 - last, max(1, int((window[1] - window[0]) / 1.5)))
+            distribute(range(last + 1, last + 1 + count), *window)
     captions = []
     for index in sorted(filled):
         start, end = filled[index]
@@ -502,7 +518,12 @@ def _mdx_istft(spec, window):
 
 
 def separate_vocals_file(mix_path: Path, vocals_path: Path, progress) -> None:
-    """Isola a voz de um WAV estéreo 44.1kHz com o modelo MDX-Net."""
+    """Isola a voz de um WAV estéreo 44.1kHz com o modelo MDX-Net.
+
+    Cada trecho é processado duas vezes (com a fase invertida na segunda,
+    o que cancela ruído do modelo) e as janelas avançam com 50% de
+    sobreposição, evitando emendas audíveis entre os trechos.
+    """
     import numpy as np
     import onnxruntime
     import wave
@@ -515,17 +536,8 @@ def separate_vocals_file(mix_path: Path, vocals_path: Path, progress) -> None:
         str(VOCALS_MODEL_PATH), providers=["CPUExecutionProvider"]
     )
     window = _mdx_window()
-    pad = MDX_GEN - (length % MDX_GEN or MDX_GEN)
-    padded = np.concatenate(
-        [np.zeros((2, MDX_TRIM), np.float32), mix,
-         np.zeros((2, pad + MDX_TRIM), np.float32)], axis=1,
-    )
-    chunks = (padded.shape[1] - MDX_CHUNK) // MDX_GEN + 1
-    pieces = []
-    for c in range(chunks):
-        piece = padded[:, c * MDX_GEN:c * MDX_GEN + MDX_CHUNK]
-        if piece.shape[1] < MDX_CHUNK:
-            piece = np.pad(piece, ((0, 0), (0, MDX_CHUNK - piece.shape[1])))
+
+    def infer(piece):
         spec = _mdx_stft(piece, window)[:, :MDX_DIM_F, :]
         tensor = np.stack(
             [spec[0].real, spec[0].imag, spec[1].real, spec[1].imag]
@@ -534,9 +546,33 @@ def separate_vocals_file(mix_path: Path, vocals_path: Path, progress) -> None:
         full = np.zeros((2, MDX_N_FFT // 2 + 1, MDX_DIM_T), np.complex128)
         full[0, :MDX_DIM_F] = out[0] + 1j * out[1]
         full[1, :MDX_DIM_F] = out[2] + 1j * out[3]
-        pieces.append(_mdx_istft(full, window)[:, MDX_TRIM:MDX_TRIM + MDX_GEN])
-        progress(c + 1, chunks)
-    vocals = np.concatenate(pieces, axis=1)[:, :length] * MDX_COMPENSATE
+        return _mdx_istft(full, window)
+
+    pad = MDX_GEN - (length % MDX_GEN or MDX_GEN)
+    padded = np.concatenate(
+        [np.zeros((2, MDX_TRIM), np.float32), mix,
+         np.zeros((2, pad + MDX_TRIM), np.float32)], axis=1,
+    )
+    step = MDX_GEN // 2
+    starts = list(range(0, padded.shape[1] - MDX_CHUNK + 1, step))
+    total_samples = padded.shape[1]
+    acc = np.zeros((2, total_samples))
+    hits = np.zeros(total_samples)
+    for index, position in enumerate(starts):
+        piece = padded[:, position:position + MDX_CHUNK]
+        clean = 0.5 * (infer(piece) - infer(-piece))
+        acc[:, position + MDX_TRIM:position + MDX_TRIM + MDX_GEN] += (
+            clean[:, MDX_TRIM:MDX_TRIM + MDX_GEN]
+        )
+        hits[position + MDX_TRIM:position + MDX_TRIM + MDX_GEN] += 1
+        progress(index + 1, len(starts))
+    hits[hits < 1] = 1
+    vocals = (acc / hits)[:, MDX_TRIM:MDX_TRIM + length] * MDX_COMPENSATE
+    # Normaliza o volume: a voz separada costuma sair baixa, o que
+    # prejudica o reconhecimento do Whisper.
+    peak = float(np.abs(vocals).max())
+    if peak > 1e-4:
+        vocals = vocals * min(0.9 / peak, 10.0)
     samples = (np.clip(vocals, -1, 1) * 32767).astype(np.int16)
     with wave.open(str(vocals_path), "wb") as wav:
         wav.setnchannels(2)
@@ -746,13 +782,14 @@ class Engine:
                         self.emit(f"{label}… {int(s.end)}s / {int(total)}s", pct)
                     return words, total
 
-                vocal_words = []
+                vocal_words, vocal_raw_words = [], []
                 if vocals is not None:
-                    vocal_words, total = listen(vocals, "default", "Ouvindo a voz isolada", 45, 65)
-                if vocal_words:
+                    vocal_words, total = listen(vocals, "default", "Ouvindo a voz isolada", 45, 60)
+                    vocal_raw_words, total = listen(vocals, None, "Reouvindo a voz isolada", 60, 72)
+                if vocal_words or vocal_raw_words:
                     # Com a voz isolada como fonte principal, o mix completo
                     # sem filtro serve de apoio para versos perdidos.
-                    mix_words, total = listen(mix, None, "Conferindo na música completa", 65, 85)
+                    mix_words, total = listen(mix, None, "Conferindo na música completa", 72, 85)
                 else:
                     # No mix, o VAD tolerante (0.2) mantém canto que o limiar
                     # padrão descartaria como "não-fala".
@@ -761,14 +798,14 @@ class Engine:
                         mix_words, total = listen(mix, None, "Ouvindo sem filtro de voz", 65, 85)
                 del model
                 gc.collect()
-                return vocal_words, mix_words, total
+                return vocal_words, vocal_raw_words, mix_words, total
 
             try:
                 self.emit("Ouvindo a música com a GPU…", 44)
-                vocal_words, mix_words, total = run("cuda", "float16")
+                vocal_words, vocal_raw_words, mix_words, total = run("cuda", "float16")
             except Exception:
                 self.emit("Ouvindo a música pela CPU…", 44)
-                vocal_words, mix_words, total = run("cpu", "int8")
+                vocal_words, vocal_raw_words, mix_words, total = run("cpu", "int8")
             try:
                 env = (
                     audio_envelope(vocals, emphasize_highs=False)
@@ -776,16 +813,15 @@ class Engine:
                 )
             except Exception:
                 env = None
-        if not vocal_words and not mix_words:
+        if not vocal_words and not vocal_raw_words and not mix_words:
             raise RuntimeError("Não encontrei voz cantada nesse vídeo.")
         self.emit("Sincronizando os versos…", 95)
-        if vocal_words:
-            spans = merge_spans(
-                align_lyrics_to_words(lines, vocal_words),
-                align_lyrics_to_words(lines, mix_words),
-            )
-        else:
-            spans = align_lyrics_to_words(lines, mix_words)
+        # As três escutas erram versos diferentes; o merge preenche as
+        # lacunas de uma com as âncoras das outras, respeitando a ordem.
+        spans = align_lyrics_to_words(lines, vocal_words)
+        for support in (vocal_raw_words, mix_words):
+            if support:
+                spans = merge_spans(spans, align_lyrics_to_words(lines, support))
         captions = captions_from_lyrics(lines, spans, total, env)
         captions = refine_lyric_starts(captions, env)
         captions = extend_lyric_ends(captions, total)
