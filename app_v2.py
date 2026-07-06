@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import ctypes
 import html
 import os
 import re
@@ -10,6 +11,8 @@ import sys
 import tempfile
 import threading
 import traceback
+import urllib.request
+import zipfile
 from array import array
 from copy import deepcopy
 from pathlib import Path
@@ -24,7 +27,7 @@ from PySide6.QtGui import (
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from PySide6.QtWidgets import (
-    QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel,
+    QApplication, QCheckBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel,
     QFontComboBox, QGraphicsItem, QGraphicsScene, QGraphicsTextItem, QGraphicsView,
     QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
     QScrollBar, QSizePolicy, QSlider, QSpinBox, QSplitter, QStyledItemDelegate,
@@ -33,20 +36,35 @@ from PySide6.QtWidgets import (
 
 
 APP_NAME = "Din Subtitler"
-ROOT = Path(__file__).resolve().parent
+FROZEN = bool(getattr(sys, "frozen", False))
+ROOT = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
+BUNDLE_ROOT = Path(getattr(sys, "_MEIPASS", ROOT))
 MODELS_DIR = ROOT / "models"
-BIN_DIR = ROOT / "bin"
+BIN_DIR = BUNDLE_ROOT if FROZEN else ROOT / "bin"
 CRASH_LOG = ROOT / "crash.log"
 VIDEO_TYPES = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".mpeg", ".mpg", ".wmv"}
 os.environ["PATH"] = str(BIN_DIR) + os.pathsep + os.environ.get("PATH", "")
 _DLL_HANDLES = []
-if os.name == "nt":
-    # As bibliotecas CUDA (cuBLAS/cuDNN) vêm dos pacotes pip da NVIDIA dentro do venv.
+
+
+def activate_gpu_dlls():
+    if os.name != "nt":
+        return
     for pkg in ("cublas", "cudnn"):
-        dll_dir = Path(sys.prefix) / "Lib" / "site-packages" / "nvidia" / pkg / "bin"
+        dll_dir = (
+            BUNDLE_ROOT / "nvidia" / pkg / "bin"
+            if FROZEN else
+            Path(sys.prefix) / "Lib" / "site-packages" / "nvidia" / pkg / "bin"
+        )
         if dll_dir.exists():
             os.environ["PATH"] = str(dll_dir) + os.pathsep + os.environ["PATH"]
-            _DLL_HANDLES.append(os.add_dll_directory(str(dll_dir)))
+            if str(dll_dir) not in getattr(activate_gpu_dlls, "paths", set()):
+                _DLL_HANDLES.append(os.add_dll_directory(str(dll_dir)))
+                activate_gpu_dlls.paths = getattr(activate_gpu_dlls, "paths", set())
+                activate_gpu_dlls.paths.add(str(dll_dir))
+
+
+activate_gpu_dlls()
 
 
 def _log_uncaught(exc_type, exc_value, exc_tb):
@@ -287,6 +305,165 @@ class Job(QObject):
             self.finished.emit(self.fn(lambda t, p: self.progress.emit(t, p)))
         except Exception as e:
             self.failed.emit(str(e))
+
+
+def model_is_ready() -> bool:
+    model = MODELS_DIR / "whisper"
+    return all((model / name).is_file() for name in ("model.bin", "config.json", "tokenizer.json"))
+
+
+def nvidia_is_available() -> bool:
+    if os.name != "nt":
+        return False
+    try:
+        ctypes.WinDLL("nvcuda.dll")
+        return True
+    except Exception:
+        return False
+
+
+def gpu_components_ready() -> bool:
+    return (
+        any((BIN_DIR / "nvidia" / "cublas" / "bin").glob("cublas64_*.dll"))
+        and any((BIN_DIR / "nvidia" / "cudnn" / "bin").glob("cudnn*.dll"))
+    )
+
+
+def download_nvidia_package(package: str):
+    import json
+    with urllib.request.urlopen(
+        f"https://pypi.org/pypi/{package}/json", timeout=30
+    ) as response:
+        metadata = json.load(response)
+    wheel = next(
+        (
+            item for item in metadata["urls"]
+            if item["filename"].endswith("win_amd64.whl")
+        ),
+        None,
+    )
+    if not wheel:
+        raise RuntimeError(f"Não encontrei o componente Windows de {package}.")
+    with tempfile.TemporaryDirectory(prefix="din-gpu-") as directory:
+        wheel_path = Path(directory) / wheel["filename"]
+        urllib.request.urlretrieve(wheel["url"], wheel_path)
+        with zipfile.ZipFile(wheel_path) as archive:
+            members = [
+                name for name in archive.namelist()
+                if name.startswith("nvidia/") and "/bin/" in name
+            ]
+            archive.extractall(BIN_DIR, members)
+
+
+class ModelDownloadWorker(QObject):
+    finished = Signal()
+    failed = Signal(str)
+
+    def __init__(self, include_gpu: bool):
+        super().__init__()
+        self.include_gpu = include_gpu
+
+    def run(self):
+        try:
+            from faster_whisper.utils import download_model
+            MODELS_DIR.mkdir(parents=True, exist_ok=True)
+            download_model("large-v3", output_dir=str(MODELS_DIR / "whisper"))
+            if self.include_gpu and not gpu_components_ready():
+                download_nvidia_package("nvidia-cublas-cu12")
+                download_nvidia_package("nvidia-cudnn-cu12")
+            if not model_is_ready():
+                raise RuntimeError("O download terminou, mas os arquivos do modelo estão incompletos.")
+            self.finished.emit()
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class ComponentSetupDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Preparar o Din Subtitler")
+        self.setModal(True)
+        self.setMinimumWidth(500)
+        self.thread = None
+        root = QVBoxLayout(self)
+        title = QLabel("<b style='font-size:15pt;color:#ff426d'>Componentes necessários</b>")
+        text = QLabel(
+            "Para transcrever e traduzir, o Din Subtitler precisa baixar o modelo "
+            "Whisper large-v3.<br><br>"
+            "O download tem aproximadamente <b>3 GB</b> e será salvo em "
+            "<b>models\\whisper</b>, dentro desta mesma pasta portable.<br><br>"
+            "Em computadores com placa NVIDIA, a aceleração opcional usa aproximadamente "
+            "<b>1,8 GB</b> adicionais dentro de <b>components</b>.<br><br>"
+            "Isso acontece apenas uma vez. Depois, o processamento funciona localmente."
+        )
+        text.setWordWrap(True)
+        self.progress = QProgressBar()
+        self.progress.setVisible(False)
+        self.status = QLabel("")
+        self.status.setWordWrap(True)
+        self.gpu_checkbox = QCheckBox(
+            "Baixar também a aceleração NVIDIA (recomendado neste computador)"
+        )
+        self.gpu_checkbox.setChecked(nvidia_is_available())
+        self.gpu_checkbox.setVisible(nvidia_is_available() and not gpu_components_ready())
+        buttons = QHBoxLayout()
+        self.later_btn = QPushButton("Agora não")
+        self.download_btn = QPushButton("Baixar componentes")
+        self.download_btn.setObjectName("primary")
+        buttons.addStretch()
+        buttons.addWidget(self.later_btn)
+        buttons.addWidget(self.download_btn)
+        root.addWidget(title)
+        root.addWidget(text)
+        root.addWidget(self.gpu_checkbox)
+        root.addWidget(self.progress)
+        root.addWidget(self.status)
+        root.addLayout(buttons)
+        self.later_btn.clicked.connect(self.reject)
+        self.download_btn.clicked.connect(self.start_download)
+
+    def start_download(self):
+        self.download_btn.setEnabled(False)
+        self.later_btn.setEnabled(False)
+        self.progress.setVisible(True)
+        self.progress.setRange(0, 0)
+        self.status.setText("Baixando o modelo… Isso pode levar alguns minutos.")
+        self.thread = QThread(self)
+        self.worker = ModelDownloadWorker(self.gpu_checkbox.isChecked())
+        self.worker.moveToThread(self.thread)
+        self.thread.started.connect(self.worker.run)
+        self.worker.finished.connect(self.download_finished)
+        self.worker.failed.connect(self.download_failed)
+        self.worker.finished.connect(self.thread.quit)
+        self.worker.failed.connect(self.thread.quit)
+        self.thread.finished.connect(self.worker.deleteLater)
+        self.thread.finished.connect(self.thread.deleteLater)
+        self.thread.start()
+
+    def download_finished(self):
+        activate_gpu_dlls()
+        self.progress.setRange(0, 100)
+        self.progress.setValue(100)
+        self.status.setText("Componentes prontos!")
+        QTimer.singleShot(350, self.accept)
+
+    def download_failed(self, message: str):
+        self.progress.setVisible(False)
+        self.status.setText("Não foi possível concluir o download.")
+        self.download_btn.setEnabled(True)
+        self.later_btn.setEnabled(True)
+        QMessageBox.critical(
+            self, APP_NAME,
+            "Não foi possível baixar o modelo.\n\n"
+            "Verifique sua conexão com a internet e tente novamente.\n\n"
+            f"Detalhes: {message}",
+        )
+
+
+def ensure_model(parent=None) -> bool:
+    if model_is_ready():
+        return True
+    return ComponentSetupDialog(parent).exec() == QDialog.DialogCode.Accepted
 
 
 class SubtitleOverlay(QGraphicsTextItem):
@@ -2066,10 +2243,16 @@ class MainWindow(QMainWindow):
             self.update_buttons()
 
     def transcribe(self):
+        if not ensure_model(self):
+            self.status.setText("O modelo precisa ser baixado antes da transcrição")
+            return
         video = self.video
         self.run_job(lambda emit: ("pt", Engine(emit).transcribe(video)))
 
     def translate(self):
+        if not ensure_model(self):
+            self.status.setText("O modelo precisa ser baixado antes da tradução")
+            return
         video = self.video
         self.run_job(lambda emit: ("en", Engine(emit).translate(video)))
 
@@ -2126,6 +2309,14 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setWindowIcon(make_app_icon())
+    if "--portable-self-test" in sys.argv:
+        print(f"root={ROOT}")
+        print(f"components={BIN_DIR}")
+        print(f"ffmpeg={shutil.which('ffmpeg') or 'missing'}")
+        print(f"model={'ready' if model_is_ready() else 'missing'}")
+        sys.exit(0 if shutil.which("ffmpeg") else 2)
     window = MainWindow()
     window.show()
+    if not model_is_ready():
+        QTimer.singleShot(250, lambda: ensure_model(window))
     sys.exit(app.exec())

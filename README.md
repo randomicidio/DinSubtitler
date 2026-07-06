@@ -34,12 +34,21 @@ As duas faixas ficam disponíveis em abas separadas. Você pode editar, juntar, 
 
 ## Instalação
 
-1. Baixe ou clone este repositório.
-2. Abra `Instalar componentes.bat`.
-3. Aguarde a instalação do FFmpeg, das dependências Python e do suporte à GPU.
-4. Abra `Din Subtitler.bat`.
+### Versão portable
 
-O modelo Whisper será baixado automaticamente na primeira utilização e ficará dentro da pasta `models`.
+1. Baixe e extraia a pasta do Din Subtitler.
+2. Abra `Din Subtitler.exe`.
+3. Na primeira abertura, clique em **Baixar componentes**.
+
+O programa não precisa ser instalado no Windows. O modelo Whisper será salvo em
+`models\whisper`, dentro da própria pasta portable. Depois do primeiro download,
+basta abrir o mesmo EXE.
+
+Em computadores com placa NVIDIA, a janela inicial também oferece a aceleração
+por GPU. Esses arquivos opcionais ficam em `components\nvidia`.
+
+Os arquivos `.bat` e o ambiente Python são necessários apenas para quem deseja
+executar ou modificar o código-fonte.
 
 ## Fluxo de uso
 
