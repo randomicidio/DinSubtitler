@@ -264,26 +264,41 @@ def normalize_token(word: str) -> str:
 
 def align_lyrics_to_words(lines: list[str], words: list[dict]) -> list[dict]:
     line_tokens = []
+    token_counts = [0] * len(lines)
     for index, line in enumerate(lines):
         for token in (normalize_token(w) for w in line.split()):
             if token:
                 line_tokens.append((token, index))
+                token_counts[index] += 1
     heard = [normalize_token(w["word"]) for w in words]
     matcher = difflib.SequenceMatcher(
         None, [t for t, _ in line_tokens], heard, autojunk=False
     )
     spans: list[list[float] | None] = [None] * len(lines)
+    matched_counts = [0] * len(lines)
     for block in matcher.get_matching_blocks():
         for offset in range(block.size):
             _, line_index = line_tokens[block.a + offset]
             word = words[block.b + offset]
+            matched_counts[line_index] += 1
             span = spans[line_index]
             if span is None:
                 spans[line_index] = [word["start"], word["end"]]
             else:
                 span[0] = min(span[0], word["start"])
                 span[1] = max(span[1], word["end"])
+    # Uma palavra solta em comum não prova que o verso foi cantado ali:
+    # só vale como âncora o verso com boa parte das palavras reconhecida.
+    for index, span in enumerate(spans):
+        if span is None:
+            continue
+        required = max(1, round(token_counts[index] * 0.4))
+        if matched_counts[index] < required:
+            spans[index] = None
     return spans
+
+
+LYRIC_MIN_LINE_SECONDS = 0.8
 
 
 def captions_from_lyrics(lines: list[str], spans: list, total: float) -> list[dict]:
@@ -292,31 +307,29 @@ def captions_from_lyrics(lines: list[str], spans: list, total: float) -> list[di
             "Não consegui reconhecer a letra dessa música no áudio.\n"
             "Confira se a letra corresponde ao que é cantado no vídeo."
         )
-    anchors = [(i, span) for i, span in enumerate(spans) if span]
-    filled = list(spans)
-    for position, (index, span) in enumerate(anchors):
-        previous = anchors[position - 1] if position else None
-        gap_start = previous[0] + 1 if previous else 0
-        begin = previous[1][1] if previous else 0.0
-        missing = index - gap_start
-        if missing > 0:
-            step = (span[0] - begin) / missing
-            for j in range(missing):
-                filled[gap_start + j] = [begin + j * step, begin + (j + 1) * step]
-    last_index, last_span = anchors[-1]
-    trailing = len(lines) - last_index - 1
-    if trailing > 0:
-        begin = last_span[1]
-        step = max(0.0, (total - begin)) / trailing
-        for j in range(trailing):
-            filled[last_index + 1 + j] = [begin + j * step, begin + (j + 1) * step]
+    # O vídeo pode mostrar só um trecho da música: versos antes do primeiro
+    # ponto reconhecido e depois do último são descartados, não inventados.
+    anchors = [i for i, span in enumerate(spans) if span]
+    filled = {i: list(spans[i]) for i in anchors}
+    for prev, nxt in zip(anchors, anchors[1:]):
+        missing = nxt - prev - 1
+        if not missing:
+            continue
+        begin, finish = spans[prev][1], spans[nxt][0]
+        gap = finish - begin
+        # Sem tempo plausível entre os vizinhos, a seção foi pulada no vídeo.
+        if gap / missing < LYRIC_MIN_LINE_SECONDS:
+            continue
+        step = gap / missing
+        for j in range(missing):
+            filled[prev + 1 + j] = [begin + j * step, begin + (j + 1) * step]
     captions = []
-    for line, span in zip(lines, filled):
-        start, end = span
+    for index in sorted(filled):
+        start, end = filled[index]
         if captions and start < captions[-1]["end"]:
             start = captions[-1]["end"]
-        end = max(end, start + 0.4)
-        captions.append({"start": round(start, 3), "end": round(end, 3), "text": line})
+        end = min(max(end, start + 0.4), max(total, start + 0.4))
+        captions.append({"start": round(start, 3), "end": round(end, 3), "text": lines[index]})
     return captions
 
 
