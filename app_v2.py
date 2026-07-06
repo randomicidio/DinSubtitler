@@ -262,6 +262,23 @@ def normalize_token(word: str) -> str:
     return "".join(c for c in word if c.isalnum() and not unicodedata.combining(c))
 
 
+WORD_MAX_HOLD_SECONDS = 3.5
+
+
+def mark_isolated_words(words: list[dict], gap_seconds: float = 0.5) -> None:
+    """Sinaliza palavras precedidas por silêncio, de qualquer origem.
+
+    Uma nota segurada logo após uma pausa (fim de frase anterior, respiro,
+    trecho instrumental) tende a ter o início esticado pelo Whisper; isso
+    é comum o bastante para não depender de ser a primeira palavra do
+    segmento interno do Whisper.
+    """
+    previous_end = 0.0
+    for word in words:
+        word["isolated_start"] = (word["start"] - previous_end) > gap_seconds
+        previous_end = word["end"]
+
+
 def align_lyrics_to_words(lines: list[str], words: list[dict]) -> list[dict]:
     line_tokens = []
     token_counts = [0] * len(lines)
@@ -281,17 +298,22 @@ def align_lyrics_to_words(lines: list[str], words: list[dict]) -> list[dict]:
             _, line_index = line_tokens[block.a + offset]
             word = words[block.b + offset]
             matched_counts[line_index] += 1
-            # Após um trecho instrumental, o Whisper estica a primeira palavra
-            # do segmento para trás; sem o limite, o verso apareceria cedo
-            # demais e ainda engoliria o espaço do verso anterior.
-            limit = 1.0 if word.get("first") else 3.0
-            start = max(word["start"], word["end"] - limit)
+            raw_start, raw_end = word["start"], word["end"]
+            # Depois de um silêncio, o Whisper costuma esticar a palavra para
+            # trás, cobrindo o instrumental; sem o limite, o verso apareceria
+            # cedo demais e ainda engoliria o espaço do verso anterior.
+            back_limit = 1.0 if word.get("isolated_start") else 3.0
+            start = max(raw_start, raw_end - back_limit)
+            # Uma nota segurada (melisma) pode fazer o Whisper grudar tempo
+            # demais numa única palavra; sem o teto, ela invade o verso
+            # seguinte em vez de só esticar o próprio verso.
+            end = min(raw_end, raw_start + WORD_MAX_HOLD_SECONDS)
             span = spans[line_index]
             if span is None:
-                spans[line_index] = [start, word["end"]]
+                spans[line_index] = [start, end]
             else:
                 span[0] = min(span[0], start)
-                span[1] = max(span[1], word["end"])
+                span[1] = max(span[1], end)
     # Uma palavra solta em comum não prova que o verso foi cantado ali:
     # só vale como âncora o verso com boa parte das palavras reconhecida.
     for index, span in enumerate(spans):
@@ -520,9 +542,9 @@ def _mdx_istft(spec, window):
 def separate_vocals_file(mix_path: Path, vocals_path: Path, progress) -> None:
     """Isola a voz de um WAV estéreo 44.1kHz com o modelo MDX-Net.
 
-    Cada trecho é processado duas vezes (com a fase invertida na segunda,
-    o que cancela ruído do modelo) e as janelas avançam com 50% de
-    sobreposição, evitando emendas audíveis entre os trechos.
+    As janelas avançam com sobreposição parcial (menos redundância que
+    50%, mas ainda o suficiente para evitar emendas audíveis) e o
+    resultado nas áreas sobrepostas é uma média.
     """
     import numpy as np
     import onnxruntime
@@ -532,8 +554,10 @@ def separate_vocals_file(mix_path: Path, vocals_path: Path, progress) -> None:
         data = np.frombuffer(wav.readframes(wav.getnframes()), dtype=np.int16)
     mix = (data.reshape(-1, 2).T / 32768.0).astype(np.float32)
     length = mix.shape[1]
+    options = onnxruntime.SessionOptions()
+    options.intra_op_num_threads = max(1, os.cpu_count() or 1)
     session = onnxruntime.InferenceSession(
-        str(VOCALS_MODEL_PATH), providers=["CPUExecutionProvider"]
+        str(VOCALS_MODEL_PATH), sess_options=options, providers=["CPUExecutionProvider"]
     )
     window = _mdx_window()
 
@@ -553,14 +577,14 @@ def separate_vocals_file(mix_path: Path, vocals_path: Path, progress) -> None:
         [np.zeros((2, MDX_TRIM), np.float32), mix,
          np.zeros((2, pad + MDX_TRIM), np.float32)], axis=1,
     )
-    step = MDX_GEN // 2
+    step = MDX_GEN * 2 // 3
     starts = list(range(0, padded.shape[1] - MDX_CHUNK + 1, step))
     total_samples = padded.shape[1]
     acc = np.zeros((2, total_samples))
     hits = np.zeros(total_samples)
     for index, position in enumerate(starts):
         piece = padded[:, position:position + MDX_CHUNK]
-        clean = 0.5 * (infer(piece) - infer(-piece))
+        clean = infer(piece)
         acc[:, position + MDX_TRIM:position + MDX_TRIM + MDX_GEN] += (
             clean[:, MDX_TRIM:MDX_TRIM + MDX_GEN]
         )
@@ -773,29 +797,51 @@ class Engine:
                     total = max(info.duration, 0.001)
                     words = []
                     for s in segs:
-                        for j, w in enumerate(s.words or []):
+                        for w in s.words or []:
                             words.append({
                                 "word": w.word, "start": float(w.start), "end": float(w.end),
-                                "first": j == 0,
                             })
                         pct = lo + round(min(1.0, s.end / total) * (hi - lo))
                         self.emit(f"{label}… {int(s.end)}s / {int(total)}s", pct)
+                    mark_isolated_words(words)
                     return words, total
 
-                vocal_words, vocal_raw_words = [], []
+                def coverage(*sources) -> float:
+                    spans = None
+                    for source in sources:
+                        if not source:
+                            continue
+                        current = align_lyrics_to_words(lines, source)
+                        spans = current if spans is None else merge_spans(spans, current)
+                    if spans is None:
+                        return 0.0
+                    return sum(1 for s in spans if s) / len(lines)
+
+                vocal_words, vocal_raw_words, mix_words = [], [], []
                 if vocals is not None:
-                    vocal_words, total = listen(vocals, "default", "Ouvindo a voz isolada", 45, 60)
-                    vocal_raw_words, total = listen(vocals, None, "Reouvindo a voz isolada", 60, 72)
-                if vocal_words or vocal_raw_words:
-                    # Com a voz isolada como fonte principal, o mix completo
-                    # sem filtro serve de apoio para versos perdidos.
-                    mix_words, total = listen(mix, None, "Conferindo na música completa", 72, 85)
-                else:
-                    # No mix, o VAD tolerante (0.2) mantém canto que o limiar
-                    # padrão descartaria como "não-fala".
-                    mix_words, total = listen(mix, 0.2, "Ouvindo a música", 65, 85)
-                    if not mix_words:
-                        mix_words, total = listen(mix, None, "Ouvindo sem filtro de voz", 65, 85)
+                    vocal_words, total = listen(vocals, "default", "Ouvindo a voz isolada", 45, 62)
+                    # Passes extras só valem a pena quando ainda faltam
+                    # versos para ancorar; se a voz isolada já cobriu quase
+                    # tudo, pular economiza bastante tempo de processamento.
+                    if coverage(vocal_words) < 0.92:
+                        vocal_raw_words, total = listen(
+                            vocals, None, "Reouvindo a voz isolada", 62, 74
+                        )
+                if coverage(vocal_words, vocal_raw_words) < 0.92:
+                    if vocals is not None:
+                        # Com a voz isolada como fonte principal, o mix
+                        # completo sem filtro serve de apoio.
+                        mix_words, total = listen(
+                            mix, None, "Conferindo na música completa", 74, 85
+                        )
+                    else:
+                        # No mix, o VAD tolerante (0.2) mantém canto que o
+                        # limiar padrão descartaria como "não-fala".
+                        mix_words, total = listen(mix, 0.2, "Ouvindo a música", 65, 85)
+                        if not mix_words:
+                            mix_words, total = listen(
+                                mix, None, "Ouvindo sem filtro de voz", 65, 85
+                            )
                 del model
                 gc.collect()
                 return vocal_words, vocal_raw_words, mix_words, total
