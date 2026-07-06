@@ -3,6 +3,7 @@ from __future__ import annotations
 import difflib
 import gc
 import ctypes
+import hashlib
 import html
 import json
 import os
@@ -46,6 +47,13 @@ BUNDLE_ROOT = Path(getattr(sys, "_MEIPASS", ROOT))
 MODELS_DIR = ROOT / "models"
 BIN_DIR = BUNDLE_ROOT if FROZEN else ROOT / "bin"
 CRASH_LOG = ROOT / "crash.log"
+VOCALS_CACHE_DIR = ROOT / "cache" / "vocals"
+
+
+def vocals_cache_path(video: Path) -> Path:
+    stat = video.stat()
+    key = hashlib.sha1(f"{video.resolve()}|{stat.st_size}|{stat.st_mtime}".encode()).hexdigest()
+    return VOCALS_CACHE_DIR / f"{key}.wav"
 VIDEO_TYPES = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".mpeg", ".mpg", ".wmv"}
 os.environ["PATH"] = str(BIN_DIR) + os.pathsep + os.environ.get("PATH", "")
 _DLL_HANDLES = []
@@ -747,11 +755,12 @@ class Engine:
         if result.returncode:
             raise RuntimeError("Não consegui extrair o áudio desse vídeo.")
 
-    def sync_lyrics(self, video: Path, lyrics: str) -> list[dict]:
+    def sync_lyrics(self, video: Path, lyrics: str) -> tuple[list[dict], Path | None]:
         lines = lyric_lines(lyrics)
         if not lines:
             raise RuntimeError("A letra está vazia.")
         self.ensure_tools()
+        saved_vocals_path = None
         with tempfile.TemporaryDirectory(prefix="din-subtitler-") as td:
             folder = Path(td)
             mix = folder / "mix.wav"
@@ -772,6 +781,15 @@ class Engine:
                     ))
                     vocals = folder / "vocals.wav"
                     self._extract_audio(vocals44, vocals, 1, 16000)
+                    # A voz isolada é guardada para o usuário poder ouvi-la
+                    # e usar a waveform dela para revisar a sincronização.
+                    try:
+                        VOCALS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+                        cache_path = vocals_cache_path(video)
+                        shutil.copyfile(vocals44, cache_path)
+                        saved_vocals_path = cache_path
+                    except Exception:
+                        saved_vocals_path = None
                 except Exception:
                     vocals = None
             from faster_whisper import WhisperModel
@@ -872,7 +890,7 @@ class Engine:
         captions = refine_lyric_starts(captions, env)
         captions = extend_lyric_ends(captions, total)
         self.emit(f"{len(captions)} versos sincronizados.", 100)
-        return captions
+        return captions, saved_vocals_path
 
     def translate(self, video: Path) -> list[dict]:
         return self._run_whisper(
@@ -2159,6 +2177,7 @@ class SubtitleEditor(QWidget):
 
 class MainWindow(QMainWindow):
     waveformReady = Signal(object, float)
+    vocalsWaveformReady = Signal(object, float)
 
     def __init__(self):
         super().__init__()
@@ -2174,10 +2193,19 @@ class MainWindow(QMainWindow):
         self.overlay_updating = False
         self.loading_first_frame = False
         self.user_muted = False
+        self.vocals_path: Path | None = None
+        self.original_waveform: tuple[list[float], float] | None = None
+        self.vocals_waveform: tuple[list[float], float] | None = None
+        self.isolated_active = False
         self.player = QMediaPlayer(self)
         self.audio = QAudioOutput(self)
         self.player.setAudioOutput(self.audio)
         self.audio.setVolume(.8)
+        self.vocals_player = QMediaPlayer(self)
+        self.vocals_audio = QAudioOutput(self)
+        self.vocals_player.setAudioOutput(self.vocals_audio)
+        self.vocals_audio.setVolume(.8)
+        self.vocals_audio.setMuted(True)
         self.build()
         self.style()
         self.setAcceptDrops(True)
@@ -2300,8 +2328,17 @@ class MainWindow(QMainWindow):
         self.volume_slider.setValue(80)
         self.volume_slider.setFixedWidth(90)
         self.volume_slider.setToolTip("Volume")
-        self.volume_slider.valueChanged.connect(lambda v: self.audio.setVolume(v / 100))
+        self.volume_slider.valueChanged.connect(self.set_players_volume)
         transport.addWidget(self.volume_slider)
+        transport.addSpacing(10)
+        self.isolated_toggle = QCheckBox("Voz isolada")
+        self.isolated_toggle.setEnabled(False)
+        self.isolated_toggle.setToolTip(
+            "Toca o áudio e mostra a waveform da voz isolada\n"
+            "gerada na última sincronização de letra de música."
+        )
+        self.isolated_toggle.toggled.connect(self.toggle_isolated_audio)
+        transport.addWidget(self.isolated_toggle)
         player_layout.addLayout(transport)
         preview = QHBoxLayout()
         preview.setContentsMargins(2, 2, 2, 2)
@@ -2481,6 +2518,7 @@ class MainWindow(QMainWindow):
         self.player.playbackStateChanged.connect(
             lambda s: self.play_btn.setText("❚❚" if s == QMediaPlayer.PlaybackState.PlayingState else "▶")
         )
+        self.player.playbackStateChanged.connect(self.mirror_playback_state)
         self.transcribe_btn.clicked.connect(self.transcribe)
         self.translate_btn.clicked.connect(self.translate)
         self.lyrics_btn.clicked.connect(self.sync_lyrics)
@@ -2516,7 +2554,8 @@ class MainWindow(QMainWindow):
         )
         self.waveform.structureChanged.connect(self.waveform_structure_changed)
         self.waveform.segmentEditRequested.connect(self.waveform_edit_requested)
-        self.waveformReady.connect(self.waveform.set_waveform)
+        self.waveformReady.connect(self.original_waveform_ready)
+        self.vocalsWaveformReady.connect(self.vocals_waveform_ready)
         for editor in (self.pt_editor, self.en_editor, self.lyric_editor):
             editor.editingStarted.connect(
                 lambda row, source=editor: self.subtitle_editing_started(source, row)
@@ -2622,9 +2661,69 @@ class MainWindow(QMainWindow):
 
     def toggle_mute(self):
         self.user_muted = not self.user_muted
-        self.audio.setMuted(self.user_muted)
+        self.apply_mute()
         self.volume_btn.setText("🔇" if self.user_muted else "🔊")
         self.volume_btn.setToolTip("Desmutar" if self.user_muted else "Mutar")
+
+    def apply_mute(self):
+        # Só uma fonte de áudio toca por vez: a inativa fica sempre muda
+        # para não sobrepor a voz isolada com o áudio original do vídeo.
+        if self.isolated_active:
+            self.audio.setMuted(True)
+            self.vocals_audio.setMuted(self.user_muted)
+        else:
+            self.audio.setMuted(self.user_muted)
+            self.vocals_audio.setMuted(True)
+
+    def set_players_volume(self, value: int):
+        self.audio.setVolume(value / 100)
+        self.vocals_audio.setVolume(value / 100)
+
+    def mirror_playback_state(self, state):
+        if not self.isolated_active or self.vocals_path is None:
+            return
+        if state == QMediaPlayer.PlaybackState.PlayingState:
+            self.vocals_player.play()
+        else:
+            self.vocals_player.pause()
+
+    def set_vocals_path(self, path: Path | None):
+        self.vocals_path = path
+        self.vocals_waveform = None
+        if path is None:
+            self.isolated_toggle.setChecked(False)
+            self.isolated_toggle.setEnabled(False)
+        else:
+            self.isolated_toggle.setEnabled(True)
+
+    def toggle_isolated_audio(self, checked: bool):
+        self.isolated_active = bool(checked) and self.vocals_path is not None
+        self.apply_mute()
+        if self.isolated_active:
+            source = QUrl.fromLocalFile(str(self.vocals_path))
+            if self.vocals_player.source() != source:
+                self.vocals_player.setSource(source)
+            self.vocals_player.setPosition(self.player.position())
+            if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+                self.vocals_player.play()
+            if self.vocals_waveform is None:
+                self.load_waveform(self.vocals_path, self.vocalsWaveformReady)
+            else:
+                self.waveform.set_waveform(*self.vocals_waveform)
+        else:
+            self.vocals_player.pause()
+            if self.original_waveform is not None:
+                self.waveform.set_waveform(*self.original_waveform)
+
+    def original_waveform_ready(self, peaks, duration):
+        self.original_waveform = (peaks, duration)
+        if not self.isolated_active:
+            self.waveform.set_waveform(peaks, duration)
+
+    def vocals_waveform_ready(self, peaks, duration):
+        self.vocals_waveform = (peaks, duration)
+        if self.isolated_active:
+            self.waveform.set_waveform(peaks, duration)
 
     def update_subtitle_preview(self):
         if self.subtitle_overlay.editing:
@@ -2790,12 +2889,23 @@ class MainWindow(QMainWindow):
         self.file_label.setText(f"<b>{path.name}</b><br>{path.stat().st_size / 1048576:.1f} MB")
         self.loading_first_frame = True
         self.player.setSource(QUrl.fromLocalFile(str(path)))
+        self.vocals_player.stop()
+        self.vocals_player.setSource(QUrl())
+        self.original_waveform = None
+        cached_vocals = None
+        try:
+            candidate = vocals_cache_path(path)
+            if candidate.is_file():
+                cached_vocals = candidate
+        except OSError:
+            cached_vocals = None
+        self.set_vocals_path(cached_vocals)
         self.waveform.set_captions([])
         self.waveform.set_waveform([], 1.0)
-        self.load_waveform(path)
+        self.load_waveform(path, self.waveformReady)
         self.update_buttons()
 
-    def load_waveform(self, path: Path):
+    def load_waveform(self, path: Path, ready_signal):
         def worker():
             try:
                 proc = subprocess.run(
@@ -2815,7 +2925,7 @@ class MainWindow(QMainWindow):
                     max((abs(v) for v in samples[i:i + bucket]), default=0) / 32768
                     for i in range(0, len(samples), bucket)
                 ]
-                self.waveformReady.emit(peaks, len(samples) / 8000)
+                ready_signal.emit(peaks, len(samples) / 8000)
             except Exception:
                 pass
 
@@ -2833,6 +2943,8 @@ class MainWindow(QMainWindow):
         self.waveform.set_position(pos / 1000)
         self.update_subtitle_preview()
         self.active_editor().follow_position(pos / 1000)
+        if self.isolated_active and abs(self.vocals_player.position() - pos) > 150:
+            self.vocals_player.setPosition(pos)
 
     def track_editors(self):
         return {"pt": self.pt_editor, "en": self.en_editor, "lyric": self.lyric_editor}
@@ -2927,12 +3039,17 @@ class MainWindow(QMainWindow):
     def job_done(self, payload):
         self.set_busy(False)
         self.progress.setVisible(False)
-        kind, captions = payload
+        kind, result = payload
         messages = {
             "pt": "Transcrição pronta para revisão",
             "en": "Tradução pronta para revisão",
             "lyric": "Letra sincronizada pronta para revisão",
         }
+        if kind == "lyric":
+            captions, vocals_path = result
+            self.set_vocals_path(vocals_path)
+        else:
+            captions = result
         setattr(self, kind, captions)
         editor = self.editor_for(kind)
         editor.set_captions(captions)
@@ -2974,6 +3091,11 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         video, lyrics = self.video, dialog.lyrics
+        # Libera o arquivo da voz isolada antes de regravá-lo, para o
+        # Windows não bloquear a sobrescrita por ainda estar em reprodução.
+        self.vocals_player.stop()
+        self.vocals_player.setSource(QUrl())
+        self.set_vocals_path(None)
         self.run_job(lambda emit: ("lyric", Engine(emit).sync_lyrics(video, lyrics)))
 
     def save(self, language):
