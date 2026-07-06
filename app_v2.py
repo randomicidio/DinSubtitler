@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import difflib
 import gc
 import ctypes
 import html
+import json
 import os
 import re
 import shutil
@@ -11,6 +13,8 @@ import sys
 import tempfile
 import threading
 import traceback
+import unicodedata
+import urllib.parse
 import urllib.request
 import zipfile
 from array import array
@@ -222,6 +226,100 @@ def write_srt(path: Path, captions: list[dict]) -> None:
             f.write(f"{wrap_caption(c['text'])}\n\n")
 
 
+def fetch_lyrics(artist: str, track: str) -> str:
+    query = urllib.parse.urlencode({"artist_name": artist, "track_name": track})
+    request = urllib.request.Request(
+        f"https://lrclib.net/api/search?{query}",
+        headers={"User-Agent": f"{APP_NAME} (https://github.com/randomicidio/DinSubtitler)"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            results = json.load(response)
+    except Exception as exc:
+        raise RuntimeError(f"Não consegui consultar a letra na internet.\n{exc}") from exc
+    for item in results:
+        lyrics = (item.get("plainLyrics") or "").strip()
+        if lyrics:
+            return lyrics
+    raise RuntimeError(
+        "Nenhuma letra foi encontrada para essa música.\n"
+        "Confira o nome do artista e da música, ou cole a letra manualmente."
+    )
+
+
+def lyric_lines(text: str) -> list[str]:
+    lines = []
+    for raw in text.splitlines():
+        line = clean(raw)
+        if not line or re.fullmatch(r"[\[(].*[\])]", line):
+            continue
+        lines.append(line)
+    return lines
+
+
+def normalize_token(word: str) -> str:
+    word = unicodedata.normalize("NFD", word.lower())
+    return "".join(c for c in word if c.isalnum() and not unicodedata.combining(c))
+
+
+def align_lyrics_to_words(lines: list[str], words: list[dict]) -> list[dict]:
+    line_tokens = []
+    for index, line in enumerate(lines):
+        for token in (normalize_token(w) for w in line.split()):
+            if token:
+                line_tokens.append((token, index))
+    heard = [normalize_token(w["word"]) for w in words]
+    matcher = difflib.SequenceMatcher(
+        None, [t for t, _ in line_tokens], heard, autojunk=False
+    )
+    spans: list[list[float] | None] = [None] * len(lines)
+    for block in matcher.get_matching_blocks():
+        for offset in range(block.size):
+            _, line_index = line_tokens[block.a + offset]
+            word = words[block.b + offset]
+            span = spans[line_index]
+            if span is None:
+                spans[line_index] = [word["start"], word["end"]]
+            else:
+                span[0] = min(span[0], word["start"])
+                span[1] = max(span[1], word["end"])
+    return spans
+
+
+def captions_from_lyrics(lines: list[str], spans: list, total: float) -> list[dict]:
+    if not any(spans):
+        raise RuntimeError(
+            "Não consegui reconhecer a letra dessa música no áudio.\n"
+            "Confira se a letra corresponde ao que é cantado no vídeo."
+        )
+    anchors = [(i, span) for i, span in enumerate(spans) if span]
+    filled = list(spans)
+    for position, (index, span) in enumerate(anchors):
+        previous = anchors[position - 1] if position else None
+        gap_start = previous[0] + 1 if previous else 0
+        begin = previous[1][1] if previous else 0.0
+        missing = index - gap_start
+        if missing > 0:
+            step = (span[0] - begin) / missing
+            for j in range(missing):
+                filled[gap_start + j] = [begin + j * step, begin + (j + 1) * step]
+    last_index, last_span = anchors[-1]
+    trailing = len(lines) - last_index - 1
+    if trailing > 0:
+        begin = last_span[1]
+        step = max(0.0, (total - begin)) / trailing
+        for j in range(trailing):
+            filled[last_index + 1 + j] = [begin + j * step, begin + (j + 1) * step]
+    captions = []
+    for line, span in zip(lines, filled):
+        start, end = span
+        if captions and start < captions[-1]["end"]:
+            start = captions[-1]["end"]
+        end = max(end, start + 0.4)
+        captions.append({"start": round(start, 3), "end": round(end, 3), "text": line})
+    return captions
+
+
 class Engine:
     def __init__(self, progress):
         self.progress = progress
@@ -284,6 +382,54 @@ class Engine:
         return self._run_whisper(
             video, "transcribe", "Transcrevendo em português", CAPTION_MAX_CHARS
         )
+
+    def sync_lyrics(self, video: Path, lyrics: str) -> list[dict]:
+        lines = lyric_lines(lyrics)
+        if not lines:
+            raise RuntimeError("A letra está vazia.")
+        self.ensure_tools()
+        with tempfile.TemporaryDirectory(prefix="din-subtitler-") as td:
+            audio = Path(td) / "audio.wav"
+            self.emit("Extraindo áudio…", 8)
+            result = subprocess.run(
+                ["ffmpeg", "-y", "-i", str(video), "-vn", "-ac", "1", "-ar", "16000",
+                 "-c:a", "pcm_s16le", str(audio)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            )
+            if result.returncode:
+                raise RuntimeError("Não consegui extrair o áudio desse vídeo.")
+            from faster_whisper import WhisperModel
+
+            def run(device, compute):
+                model = WhisperModel(str(MODELS_DIR / "whisper"), device=device, compute_type=compute)
+                segs, info = model.transcribe(
+                    str(audio), task="transcribe", vad_filter=True,
+                    beam_size=5, condition_on_previous_text=False, word_timestamps=True,
+                )
+                total = max(info.duration, 0.001)
+                words = []
+                for s in segs:
+                    for w in s.words or []:
+                        words.append({"word": w.word, "start": float(w.start), "end": float(w.end)})
+                    pct = 20 + round(min(1.0, s.end / total) * 70)
+                    self.emit(f"Ouvindo a música… {int(s.end)}s / {int(total)}s", pct)
+                del model
+                gc.collect()
+                return words, total
+
+            try:
+                self.emit("Ouvindo a música com a GPU…", 20)
+                words, total = run("cuda", "float16")
+            except Exception:
+                self.emit("Ouvindo a música pela CPU…", 20)
+                words, total = run("cpu", "int8")
+        if not words:
+            raise RuntimeError("Não encontrei voz cantada nesse vídeo.")
+        self.emit("Sincronizando os versos…", 95)
+        captions = captions_from_lyrics(lines, align_lyrics_to_words(lines, words), total)
+        self.emit(f"{len(captions)} versos sincronizados.", 100)
+        return captions
 
     def translate(self, video: Path) -> list[dict]:
         return self._run_whisper(
@@ -464,6 +610,100 @@ def ensure_model(parent=None) -> bool:
     if model_is_ready():
         return True
     return ComponentSetupDialog(parent).exec() == QDialog.DialogCode.Accepted
+
+
+class LyricsSearchWorker(QObject):
+    finished = Signal(str)
+    failed = Signal(str)
+
+    def __init__(self, artist: str, track: str):
+        super().__init__()
+        self.artist, self.track = artist, track
+
+    def run(self):
+        try:
+            self.finished.emit(fetch_lyrics(self.artist, self.track))
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class LyricsDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Sincronizar letra de música")
+        self.setMinimumSize(520, 560)
+        self.lyrics = ""
+        self.thread = None
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+        layout.addWidget(QLabel(
+            "Informe o artista e a música para buscar a letra na internet,\n"
+            "ou cole a letra diretamente no campo abaixo."
+        ))
+        form = QHBoxLayout()
+        self.artist_edit = QLineEdit(placeholderText="Artista ou banda")
+        self.track_edit = QLineEdit(placeholderText="Nome da música")
+        form.addWidget(self.artist_edit, 1)
+        form.addWidget(self.track_edit, 1)
+        layout.addLayout(form)
+        self.search_btn = QPushButton("Buscar letra na internet")
+        self.search_btn.clicked.connect(self.search)
+        layout.addWidget(self.search_btn)
+        self.feedback = QLabel("")
+        self.feedback.setWordWrap(True)
+        layout.addWidget(self.feedback)
+        self.lyrics_edit = QPlainTextEdit(
+            placeholderText="A letra aparecerá aqui.\nRevise antes de sincronizar: cada linha vira um trecho da legenda."
+        )
+        layout.addWidget(self.lyrics_edit, 1)
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        cancel = QPushButton("Cancelar")
+        cancel.clicked.connect(self.reject)
+        self.sync_btn = QPushButton("Sincronizar com o vídeo", objectName="primary")
+        self.sync_btn.clicked.connect(self.confirm)
+        buttons.addWidget(cancel)
+        buttons.addWidget(self.sync_btn)
+        layout.addLayout(buttons)
+        self.artist_edit.returnPressed.connect(self.search)
+        self.track_edit.returnPressed.connect(self.search)
+
+    def search(self):
+        artist, track = self.artist_edit.text().strip(), self.track_edit.text().strip()
+        if not artist or not track:
+            self.feedback.setText("Preencha o artista e o nome da música.")
+            return
+        self.search_btn.setEnabled(False)
+        self.feedback.setText("Buscando a letra…")
+        self.thread = QThread(self)
+        worker = LyricsSearchWorker(artist, track)
+        worker.moveToThread(self.thread)
+        self.thread.started.connect(worker.run)
+        worker.finished.connect(self.search_done)
+        worker.failed.connect(self.search_failed)
+        worker.finished.connect(self.thread.quit)
+        worker.failed.connect(self.thread.quit)
+        self.thread.finished.connect(worker.deleteLater)
+        self.thread.finished.connect(self.thread.deleteLater)
+        self.worker = worker
+        self.thread.start()
+
+    def search_done(self, lyrics: str):
+        self.search_btn.setEnabled(True)
+        self.feedback.setText("Letra encontrada. Revise o texto antes de sincronizar.")
+        self.lyrics_edit.setPlainText(lyrics)
+
+    def search_failed(self, message: str):
+        self.search_btn.setEnabled(True)
+        self.feedback.setText(message)
+
+    def confirm(self):
+        lyrics = self.lyrics_edit.toPlainText().strip()
+        if not lyrics:
+            self.feedback.setText("Busque ou cole a letra antes de sincronizar.")
+            return
+        self.lyrics = lyrics
+        self.accept()
 
 
 class SubtitleOverlay(QGraphicsTextItem):
@@ -1483,6 +1723,7 @@ class MainWindow(QMainWindow):
         self.video: Path | None = None
         self.pt: list[dict] = []
         self.en: list[dict] = []
+        self.lyric: list[dict] = []
         self.thread = None
         self.busy = False
         self.overlay_updating = False
@@ -1726,6 +1967,18 @@ class MainWindow(QMainWindow):
         ev.addWidget(self.open_en_btn)
         ev.addWidget(self.save_en_btn)
         av.addWidget(translation)
+        music = QFrame(objectName="section")
+        mv = QVBoxLayout(music)
+        mv.setContentsMargins(8, 8, 8, 8)
+        mv.setSpacing(5)
+        mv.addWidget(QLabel("LETRA DE MÚSICA", objectName="sectionTitle"))
+        self.lyrics_btn = QPushButton("3. Sincronizar letra de música", objectName="primary")
+        self.open_lyric_btn = QPushButton("Abrir SRT da letra")
+        self.save_lyric_btn = QPushButton("Salvar SRT da letra")
+        mv.addWidget(self.lyrics_btn)
+        mv.addWidget(self.open_lyric_btn)
+        mv.addWidget(self.save_lyric_btn)
+        av.addWidget(music)
         av.addStretch()
         top.addWidget(actions)
         top.setStretchFactor(0, 1)
@@ -1740,8 +1993,13 @@ class MainWindow(QMainWindow):
             "inglês",
             "Traduza o vídeo para gerar a legenda em inglês\nou abra um arquivo SRT existente.",
         )
+        self.lyric_editor = SubtitleEditor(
+            "letra",
+            "Sincronize a letra de uma música cantada no vídeo\nou abra um arquivo SRT existente.",
+        )
         self.editors.addTab(self.pt_editor, "Português")
         self.editors.addTab(self.en_editor, "English")
+        self.editors.addTab(self.lyric_editor, "Letra")
         corner = QWidget()
         corner_layout = QHBoxLayout(corner)
         corner_layout.setContentsMargins(0, 0, 6, 0)
@@ -1780,26 +2038,24 @@ class MainWindow(QMainWindow):
         )
         self.transcribe_btn.clicked.connect(self.transcribe)
         self.translate_btn.clicked.connect(self.translate)
+        self.lyrics_btn.clicked.connect(self.sync_lyrics)
         self.open_pt_btn.clicked.connect(lambda: self.open_subtitle("pt"))
         self.open_en_btn.clicked.connect(lambda: self.open_subtitle("en"))
+        self.open_lyric_btn.clicked.connect(lambda: self.open_subtitle("lyric"))
         self.save_pt_btn.clicked.connect(lambda: self.save("pt"))
         self.save_en_btn.clicked.connect(lambda: self.save("en"))
+        self.save_lyric_btn.clicked.connect(lambda: self.save("lyric"))
         self.merge_btn.clicked.connect(lambda: self.active_editor().merge())
         self.split_btn.clicked.connect(self.trigger_split)
         QShortcut(QKeySequence("F4"), self, activated=lambda: self.active_editor().merge())
         QShortcut(QKeySequence("F5"), self, activated=self.trigger_split)
-        self.pt_editor.seek.connect(self.player.setPosition)
-        self.en_editor.seek.connect(self.player.setPosition)
-        self.pt_editor.changed.connect(self.update_subtitle_preview)
-        self.en_editor.changed.connect(self.update_subtitle_preview)
-        self.pt_editor.changed.connect(self.editor_changed)
-        self.en_editor.changed.connect(self.editor_changed)
-        self.pt_editor.selectionChanged.connect(
-            lambda rows: self.editor_selection_changed(self.pt_editor, rows)
-        )
-        self.en_editor.selectionChanged.connect(
-            lambda rows: self.editor_selection_changed(self.en_editor, rows)
-        )
+        for editor in (self.pt_editor, self.en_editor, self.lyric_editor):
+            editor.seek.connect(self.player.setPosition)
+            editor.changed.connect(self.update_subtitle_preview)
+            editor.changed.connect(self.editor_changed)
+            editor.selectionChanged.connect(
+                lambda rows, source=editor: self.editor_selection_changed(source, rows)
+            )
         self.editors.currentChanged.connect(self.editor_tab_changed)
         self.font_box.currentFontChanged.connect(lambda _f: self.update_subtitle_preview())
         self.font_size.valueChanged.connect(lambda _v: self.update_subtitle_preview())
@@ -1816,7 +2072,7 @@ class MainWindow(QMainWindow):
         self.waveform.structureChanged.connect(self.waveform_structure_changed)
         self.waveform.segmentEditRequested.connect(self.waveform_edit_requested)
         self.waveformReady.connect(self.waveform.set_waveform)
-        for editor in (self.pt_editor, self.en_editor):
+        for editor in (self.pt_editor, self.en_editor, self.lyric_editor):
             editor.editingStarted.connect(
                 lambda row, source=editor: self.subtitle_editing_started(source, row)
             )
@@ -1825,13 +2081,16 @@ class MainWindow(QMainWindow):
         self.update_buttons()
 
     def update_buttons(self):
-        has_video, has_pt, has_en = bool(self.video), bool(self.pt), bool(self.en)
+        has_video = bool(self.video)
         self.transcribe_btn.setEnabled(has_video)
         self.open_pt_btn.setEnabled(not self.busy)
-        self.save_pt_btn.setEnabled(has_pt)
+        self.save_pt_btn.setEnabled(bool(self.pt))
         self.translate_btn.setEnabled(has_video)
         self.open_en_btn.setEnabled(not self.busy)
-        self.save_en_btn.setEnabled(has_en)
+        self.save_en_btn.setEnabled(bool(self.en))
+        self.lyrics_btn.setEnabled(has_video)
+        self.open_lyric_btn.setEnabled(not self.busy)
+        self.save_lyric_btn.setEnabled(bool(self.lyric))
 
     def dragEnterEvent(self, e):
         if e.mimeData().hasUrls() and not self.busy:
@@ -2027,42 +2286,39 @@ class MainWindow(QMainWindow):
         if path:
             self.load_video(Path(path))
 
+    TRACK_LABELS = {"pt": "português", "en": "inglês", "lyric": "letra de música"}
+
     def open_subtitle(self, language: str):
-        label = "português" if language == "pt" else "inglês"
+        label = self.TRACK_LABELS[language]
         path, _ = QFileDialog.getOpenFileName(
-            self, f"Abrir legenda em {label}", "", "SubRip (*.srt)"
+            self, f"Abrir legenda ({label})", "", "SubRip (*.srt)"
         )
         if not path:
             return
         self.load_subtitle_path(Path(path), language)
 
     def load_subtitle_path(self, path: Path, language: str):
-        label = "português" if language == "pt" else "inglês"
+        label = self.TRACK_LABELS[language]
         try:
             captions = read_srt(path)
         except Exception as exc:
             QMessageBox.critical(self, APP_NAME, str(exc))
             return
-        editor = self.pt_editor if language == "pt" else self.en_editor
+        editor = self.editor_for(language)
         editor.set_captions(captions)
-        if language == "pt":
-            self.pt = editor.captions
-            self.show_editor(0)
-        else:
-            self.en = editor.captions
-            self.show_editor(1)
+        setattr(self, language, editor.captions)
+        self.show_editor(self.editors.indexOf(editor))
         if not self.video:
             self.waveform.set_waveform([], max(c["end"] for c in captions))
         self.waveform.set_captions(editor.captions)
-        self.status.setText(f"Legenda em {label} carregada: {Path(path).name}")
+        self.status.setText(f"Legenda ({label}) carregada: {Path(path).name}")
         self.update_buttons()
 
     def handle_dropped_path(self, path: Path):
         if self.busy:
             return
         if path.suffix.lower() == ".srt":
-            language = "pt" if self.editors.currentIndex() == 0 else "en"
-            self.load_subtitle_path(path, language)
+            self.load_subtitle_path(path, self.language_of(self.active_editor()))
         elif path.suffix.lower() in VIDEO_TYPES:
             self.load_video(path)
         else:
@@ -2076,9 +2332,10 @@ class MainWindow(QMainWindow):
         if path.suffix.lower() not in VIDEO_TYPES:
             QMessageBox.warning(self, APP_NAME, "Selecione um arquivo de vídeo válido.")
             return
-        self.video, self.pt, self.en = path, [], []
+        self.video, self.pt, self.en, self.lyric = path, [], [], []
         self.pt_editor.set_captions([])
         self.en_editor.set_captions([])
+        self.lyric_editor.set_captions([])
         self.show_editor(0)
         self.video_placeholder.setVisible(False)
         self.file_label.setText(f"<b>{path.name}</b><br>{path.stat().st_size / 1048576:.1f} MB")
@@ -2128,14 +2385,26 @@ class MainWindow(QMainWindow):
         self.update_subtitle_preview()
         self.active_editor().follow_position(pos / 1000)
 
+    def track_editors(self):
+        return {"pt": self.pt_editor, "en": self.en_editor, "lyric": self.lyric_editor}
+
+    def editor_for(self, language: str):
+        return self.track_editors()[language]
+
+    def language_of(self, editor) -> str:
+        return next(k for k, v in self.track_editors().items() if v is editor)
+
+    def store_captions(self, editor):
+        setattr(self, self.language_of(editor), editor.captions)
+
     def show_editor(self, index):
         self.editors.setCurrentIndex(index)
-        editor = self.pt_editor if index == 0 else self.en_editor
+        editor = self.editors.widget(index)
         self.waveform.set_captions(editor.captions)
         self.update_subtitle_preview()
 
     def active_editor(self):
-        return self.pt_editor if self.editors.currentIndex() == 0 else self.en_editor
+        return self.editors.currentWidget()
 
     def editor_tab_changed(self, _index):
         editor = self.active_editor()
@@ -2148,10 +2417,7 @@ class MainWindow(QMainWindow):
         editor = self.active_editor()
         if self.editors.currentWidget() is editor:
             self.waveform.set_captions(editor.captions)
-        if editor is self.pt_editor:
-            self.pt = editor.captions
-        else:
-            self.en = editor.captions
+        self.store_captions(editor)
         self.update_subtitle_preview()
 
     def editor_selection_changed(self, editor, rows):
@@ -2168,10 +2434,7 @@ class MainWindow(QMainWindow):
     def waveform_segment_changed(self, row: int):
         editor = self.active_editor()
         editor.update_timing(row)
-        if editor is self.pt_editor:
-            self.pt = editor.captions
-        else:
-            self.en = editor.captions
+        self.store_captions(editor)
         self.update_subtitle_preview()
 
     def waveform_segment_selected(self, row: int):
@@ -2185,10 +2448,7 @@ class MainWindow(QMainWindow):
         target = selected_rows[0] if selected_rows else 0
         editor.refresh(target)
         editor.select_segments(selected_rows)
-        if editor is self.pt_editor:
-            self.pt = editor.captions
-        else:
-            self.en = editor.captions
+        self.store_captions(editor)
         editor.changed.emit()
 
     def run_job(self, operation):
@@ -2219,16 +2479,16 @@ class MainWindow(QMainWindow):
         self.set_busy(False)
         self.progress.setVisible(False)
         kind, captions = payload
-        if kind == "pt":
-            self.pt = captions
-            self.pt_editor.set_captions(self.pt)
-            self.show_editor(0)
-            self.status.setText("Transcrição pronta para revisão")
-        else:
-            self.en = captions
-            self.en_editor.set_captions(self.en)
-            self.show_editor(1)
-            self.status.setText("Tradução pronta para revisão")
+        messages = {
+            "pt": "Transcrição pronta para revisão",
+            "en": "Tradução pronta para revisão",
+            "lyric": "Letra sincronizada pronta para revisão",
+        }
+        setattr(self, kind, captions)
+        editor = self.editor_for(kind)
+        editor.set_captions(captions)
+        self.show_editor(self.editors.indexOf(editor))
+        self.status.setText(messages[kind])
         self.update_buttons()
 
     def set_busy(self, busy: bool):
@@ -2237,6 +2497,7 @@ class MainWindow(QMainWindow):
             for button in (
                 self.transcribe_btn, self.open_pt_btn, self.save_pt_btn,
                 self.translate_btn, self.open_en_btn, self.save_en_btn,
+                self.lyrics_btn, self.open_lyric_btn, self.save_lyric_btn,
             ):
                 button.setEnabled(False)
         else:
@@ -2256,15 +2517,23 @@ class MainWindow(QMainWindow):
         video = self.video
         self.run_job(lambda emit: ("en", Engine(emit).translate(video)))
 
+    def sync_lyrics(self):
+        if not ensure_model(self):
+            self.status.setText("O modelo precisa ser baixado antes da sincronização")
+            return
+        dialog = LyricsDialog(self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        video, lyrics = self.video, dialog.lyrics
+        self.run_job(lambda emit: ("lyric", Engine(emit).sync_lyrics(video, lyrics)))
+
     def save(self, language):
-        editor = self.pt_editor if language == "pt" else self.en_editor
+        editor = self.editor_for(language)
         editor.commit_text()
         captions = [dict(x) for x in editor.captions]
-        if language == "pt":
-            self.pt = captions
-        else:
-            self.en = captions
-        default = self.video.with_name(f"{self.video.stem}.{language}.srt")
+        setattr(self, language, captions)
+        suffix = {"pt": "pt", "en": "en", "lyric": "letra"}[language]
+        default = self.video.with_name(f"{self.video.stem}.{suffix}.srt")
         path, _ = QFileDialog.getSaveFileName(self, "Salvar legenda", str(default), "SubRip (*.srt)")
         if path:
             if not path.lower().endswith(".srt"):

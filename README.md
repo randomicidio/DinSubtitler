@@ -4,9 +4,9 @@ O **Din Subtitler** é um editor de legendas para Windows que transcreve e tradu
 
 Todo o processamento acontece no computador. Os vídeos não são enviados para serviços externos e o uso não consome créditos de API.
 
-## Duas ferramentas independentes
+## Três ferramentas independentes
 
-O programa oferece dois processos distintos. Depois de carregar um vídeo, você escolhe qual deles deseja executar:
+O programa oferece três processos distintos. Depois de carregar um vídeo, você escolhe qual deles deseja executar:
 
 ### Transcrição em português
 
@@ -16,12 +16,17 @@ O Whisper reconhece a fala do vídeo e cria uma faixa de legendas em português,
 
 O Whisper escuta diretamente o áudio em português e cria uma faixa de legendas traduzida para o inglês. Esse processo é independente da transcrição em português: não é necessário transcrever ou revisar a faixa PT antes de traduzir.
 
-As duas faixas ficam disponíveis em abas separadas. Você pode editar, juntar, separar, excluir e ajustar os tempos de cada idioma independentemente. Quando terminar, pode salvar a faixa portuguesa como `.pt.srt` e a inglesa como `.en.srt`.
+### Letra de música sincronizada
+
+Para vídeos de alguém cantando uma música. Você informa o artista e o nome da música, o programa busca a letra oficial na internet (via [LRCLIB](https://lrclib.net)) e mostra o texto para revisão — também é possível colar a letra manualmente. Ao sincronizar, o Whisper escuta o áudio do vídeo e cada verso da letra é posicionado no momento em que é cantado. Versos que o áudio não deixou claros são distribuídos entre os vizinhos e podem ser ajustados na waveform.
+
+As faixas ficam disponíveis em abas separadas. Você pode editar, juntar, separar, excluir e ajustar os tempos de cada uma independentemente. Quando terminar, pode salvar a faixa portuguesa como `.pt.srt`, a inglesa como `.en.srt` e a letra como `.letra.srt`.
 
 ## Principais recursos
 
 - Transcrição de áudio em português com Whisper `large-v3`
 - Tradução direta do áudio em português para inglês
+- Sincronização automática de letras de música com o áudio do vídeo
 - Processamento local e privado
 - Aceleração por GPU NVIDIA, com fallback para CPU
 - Player de vídeo com prévia das legendas
@@ -53,11 +58,11 @@ executar ou modificar o código-fonte.
 ## Fluxo de uso
 
 1. Arraste um vídeo para qualquer região da janela ou clique em **Carregar vídeo**.
-2. Escolha **Transcrever para português**, **Traduzir para inglês** ou execute os dois processos.
-   Você também pode abrir um SRT existente diretamente na seção do idioma.
-3. Abra a aba do idioma que deseja revisar.
+2. Escolha **Transcrever para português**, **Traduzir para inglês** ou **Sincronizar letra de música**.
+   Você também pode abrir um SRT existente diretamente na seção correspondente.
+3. Abra a aba da faixa que deseja revisar.
 4. Edite o texto e os tempos livremente.
-5. Salve o SRT correspondente ao idioma.
+5. Salve o SRT correspondente à faixa.
 
 ## Controles do editor
 
@@ -94,3 +99,5 @@ legendas nunca ocupem o mesmo intervalo.
 ## Privacidade e funcionamento offline
 
 Depois da instalação inicial e do download do modelo, o Din Subtitler pode funcionar sem internet. Nenhum vídeo, áudio ou texto é enviado para terceiros.
+
+A única exceção é a busca de letras de música, que consulta o serviço LRCLIB pela internet enviando apenas o nome do artista e da música. O áudio do vídeo continua sendo processado localmente, e você pode colar a letra manualmente para usar o recurso sem internet.
