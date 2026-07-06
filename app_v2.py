@@ -634,7 +634,10 @@ def separate_vocals_file(mix_path: Path, vocals_path: Path, progress) -> None:
     mix = (data.reshape(-1, 2).T / 32768.0).astype(np.float32)
     length = mix.shape[1]
     options = onnxruntime.SessionOptions()
-    options.intra_op_num_threads = max(1, os.cpu_count() or 1)
+    # Deixa pelo menos um núcleo livre: usar todos os núcleos aqui pode
+    # sufocar a thread da interface gráfica e a decodificação de vídeo o
+    # suficiente para desestabilizar o Qt durante o processamento.
+    options.intra_op_num_threads = max(1, (os.cpu_count() or 2) - 1)
     session = onnxruntime.InferenceSession(
         str(VOCALS_MODEL_PATH), sess_options=options, providers=["CPUExecutionProvider"]
     )
@@ -3149,7 +3152,10 @@ class MainWindow(QMainWindow):
         thread.finished.connect(job.deleteLater)
         thread.finished.connect(thread.deleteLater)
         self.thread, self.job = thread, job
-        thread.start()
+        # Prioridade baixa: trabalho pesado (separação de voz, Whisper) não
+        # deve competir pela CPU com a thread da interface e a decodificação
+        # de vídeo, o que pode desestabilizar o Qt durante o processamento.
+        thread.start(QThread.Priority.LowPriority)
 
     def job_failed(self, message):
         self.set_busy(False)
