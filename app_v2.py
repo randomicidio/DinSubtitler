@@ -1672,13 +1672,18 @@ class WaveformWidget(QWidget):
             start_distance = abs(x - x1)
             end_distance = abs(x - x2)
             if start_distance <= self.EDGE_PX:
-                edge_hits.append((start_distance, 0, i, "start"))
+                edge_hits.append((start_distance, x > x1, i, "start"))
             if end_distance <= self.EDGE_PX:
-                edge_hits.append((end_distance, 1, i, "end"))
+                edge_hits.append((end_distance, x < x2, i, "end"))
         if edge_hits:
             nearest = min(hit[0] for hit in edge_hits)
-            tied = [hit for hit in edge_hits if hit[0] <= nearest + 0.5]
-            _distance, _priority, index, mode = min(tied, key=lambda hit: (hit[1], hit[0]))
+            tied = [hit for hit in edge_hits if abs(hit[0] - nearest) < 1e-6]
+            # When two edges sit on the exact same pixel (adjacent blocks),
+            # distance alone can't tell them apart: prefer the edge whose
+            # block the mouse is actually hovering inside of, instead of
+            # always favoring "start".
+            inside_block = [hit for hit in tied if hit[1]]
+            _distance, _inside, index, mode = (inside_block or tied)[0]
             return index, mode
         for i, c in enumerate(self.captions):
             x1, x2 = self.time_to_x(c["start"]), self.time_to_x(c["end"])
@@ -2256,8 +2261,16 @@ class SubtitleEditor(QWidget):
         self.table.item(row, 2).setText(editor_time(self.captions[row]["end"]))
         self.loading = False
 
+    def finish_active_edit(self):
+        editor_widget = QApplication.focusWidget()
+        if isinstance(editor_widget, QPlainTextEdit) and self.table.isAncestorOf(editor_widget):
+            self.caption_delegate.commitData.emit(editor_widget)
+            self.caption_delegate.closeEditor.emit(editor_widget, QStyledItemDelegate.EndEditHint.NoHint)
+
     def select_segment(self, row: int):
         if 0 <= row < len(self.captions):
+            if self.table.currentRow() != row:
+                self.finish_active_edit()
             self.following = True
             self.table.selectRow(row)
             self.table.scrollToItem(self.table.item(row, 0))
@@ -2265,6 +2278,8 @@ class SubtitleEditor(QWidget):
 
     def select_segments(self, rows):
         valid = sorted({int(row) for row in rows if 0 <= int(row) < len(self.captions)})
+        if valid != [self.table.currentRow()]:
+            self.finish_active_edit()
         self.following = True
         self.table.clearSelection()
         if valid:
@@ -2661,9 +2676,7 @@ class MainWindow(QMainWindow):
         self.waveform.segmentChanged.connect(self.waveform_segment_changed)
         self.waveform.segmentSelected.connect(self.waveform_segment_selected)
         self.waveform.segmentEditStarted.connect(lambda: self.active_editor().push_undo())
-        self.waveform.selectionChanged.connect(
-            lambda rows: self.active_editor().select_segments(rows)
-        )
+        self.waveform.selectionChanged.connect(self.select_waveform_segments)
         self.waveform.structureChanged.connect(self.waveform_structure_changed)
         self.waveform.segmentEditRequested.connect(self.waveform_edit_requested)
         self.waveformReady.connect(self.original_waveform_ready)
@@ -3107,6 +3120,7 @@ class MainWindow(QMainWindow):
 
     def editor_selection_changed(self, editor, rows):
         if editor is self.active_editor():
+            self.stop_overlay_editing_for_other_row(rows[0] if len(rows) == 1 else -1)
             self.waveform.waveform.set_selected(rows)
 
     def subtitle_editing_started(self, editor, row: int):
@@ -3123,7 +3137,16 @@ class MainWindow(QMainWindow):
         self.update_subtitle_preview()
 
     def waveform_segment_selected(self, row: int):
+        self.stop_overlay_editing_for_other_row(row)
         self.active_editor().select_segment(row)
+
+    def select_waveform_segments(self, rows):
+        self.stop_overlay_editing_for_other_row(rows[0] if len(rows) == 1 else -1)
+        self.active_editor().select_segments(rows)
+
+    def stop_overlay_editing_for_other_row(self, row: int):
+        if self.subtitle_overlay.editing and self.waveform.waveform.editing_index != row:
+            self.subtitle_overlay.stop_editing()
 
     def waveform_edit_requested(self, row: int):
         self.active_editor().edit_segment(row)
