@@ -281,11 +281,16 @@ def align_lyrics_to_words(lines: list[str], words: list[dict]) -> list[dict]:
             _, line_index = line_tokens[block.a + offset]
             word = words[block.b + offset]
             matched_counts[line_index] += 1
+            # Após um trecho instrumental, o Whisper estica a primeira palavra
+            # do segmento para trás; sem o limite, o verso apareceria cedo
+            # demais e ainda engoliria o espaço do verso anterior.
+            limit = 1.0 if word.get("first") else 3.0
+            start = max(word["start"], word["end"] - limit)
             span = spans[line_index]
             if span is None:
-                spans[line_index] = [word["start"], word["end"]]
+                spans[line_index] = [start, word["end"]]
             else:
-                span[0] = min(span[0], word["start"])
+                span[0] = min(span[0], start)
                 span[1] = max(span[1], word["end"])
     # Uma palavra solta em comum não prova que o verso foi cantado ali:
     # só vale como âncora o verso com boa parte das palavras reconhecida.
@@ -298,10 +303,46 @@ def align_lyrics_to_words(lines: list[str], words: list[dict]) -> list[dict]:
     return spans
 
 
-LYRIC_MIN_LINE_SECONDS = 0.8
+LYRIC_MIN_LINE_SECONDS = 0.4
 
 
-def captions_from_lyrics(lines: list[str], spans: list, total: float) -> list[dict]:
+def envelope_thresholds(env):
+    """Piso e nível de "som ativo" relativos ao contraste real da faixa."""
+    import numpy as np
+
+    quiet = float(np.percentile(env, 20))
+    peak = float(np.percentile(env, 95))
+    if peak <= quiet + 1e-4:
+        return None
+    return quiet, quiet + (peak - quiet) * 0.3
+
+
+def voiced_window(env, begin: float, finish: float):
+    """Encontra do primeiro ao último instante com som ativo no intervalo."""
+    import numpy as np
+
+    if env is None or not len(env):
+        return None
+    hop = LYRIC_ENVELOPE_HOP
+    a = max(0, int(begin / hop))
+    b = min(len(env), int(finish / hop))
+    if b - a < 5:
+        return None
+    thresholds = envelope_thresholds(env)
+    if not thresholds:
+        return None
+    _, loud = thresholds
+    active = np.flatnonzero(env[a:b] >= loud)
+    if not len(active):
+        return None
+    v0 = float((a + active[0]) * hop)
+    v1 = float((a + active[-1] + 1) * hop)
+    if v1 - v0 < 0.3:
+        return None
+    return v0, v1
+
+
+def captions_from_lyrics(lines: list[str], spans: list, total: float, env=None) -> list[dict]:
     if not any(spans):
         raise RuntimeError(
             "Não consegui reconhecer a letra dessa música no áudio.\n"
@@ -311,25 +352,265 @@ def captions_from_lyrics(lines: list[str], spans: list, total: float) -> list[di
     # ponto reconhecido e depois do último são descartados, não inventados.
     anchors = [i for i, span in enumerate(spans) if span]
     filled = {i: list(spans[i]) for i in anchors}
+
+    def distribute(indexes, begin, finish):
+        # Verso com mais palavras recebe uma fatia maior do intervalo.
+        weights = [max(1, len(lines[i].split())) for i in indexes]
+        scale = (finish - begin) / sum(weights)
+        cursor = begin
+        for i, weight in zip(indexes, weights):
+            filled[i] = [cursor, cursor + weight * scale]
+            cursor += weight * scale
+
     for prev, nxt in zip(anchors, anchors[1:]):
         missing = nxt - prev - 1
         if not missing:
             continue
-        begin, finish = spans[prev][1], spans[nxt][0]
+        begin, finish = filled[prev][1], filled[nxt][0]
         gap = finish - begin
-        # Sem tempo plausível entre os vizinhos, a seção foi pulada no vídeo.
-        if gap / missing < LYRIC_MIN_LINE_SECONDS:
+        # Mesmo sem reconhecer as palavras, a presença de voz no intervalo
+        # diz onde os versos que faltam foram cantados.
+        window = voiced_window(env, begin, finish)
+        if window:
+            distribute(range(prev + 1, nxt), *window)
             continue
-        step = gap / missing
-        for j in range(missing):
-            filled[prev + 1 + j] = [begin + j * step, begin + (j + 1) * step]
+        if gap / missing < LYRIC_MIN_LINE_SECONDS:
+            if missing > 2:
+                # Muitos versos seguidos sem espaço nenhum: a seção foi
+                # pulada no vídeo, então não são inventados tempos para ela.
+                continue
+            # Poucos versos faltando é dúvida de reconhecimento, não corte:
+            # a sequência da letra tem prioridade, roubando tempo dos
+            # vizinhos (que encolhem até um mínimo de 0,6s) se necessário.
+            deficit = missing * 1.2 - gap
+            spare_prev = max(0.0, (filled[prev][1] - filled[prev][0]) - 0.6)
+            spare_next = max(0.0, (filled[nxt][1] - filled[nxt][0]) - 0.6)
+            take_prev = min(spare_prev, deficit / 2)
+            take_next = min(spare_next, deficit - take_prev)
+            take_prev = min(spare_prev, deficit - take_next)
+            filled[prev][1] -= take_prev
+            filled[nxt][0] += take_next
+            begin, finish = filled[prev][1], filled[nxt][0]
+            gap = max(finish - begin, missing * 0.6)
+        distribute(range(prev + 1, nxt), begin, begin + gap)
     captions = []
     for index in sorted(filled):
         start, end = filled[index]
         if captions and start < captions[-1]["end"]:
             start = captions[-1]["end"]
         end = min(max(end, start + 0.4), max(total, start + 0.4))
-        captions.append({"start": round(start, 3), "end": round(end, 3), "text": lines[index]})
+        captions.append({
+            "start": round(float(start), 3), "end": round(float(end), 3), "text": lines[index],
+        })
+    return captions
+
+
+LYRIC_ENVELOPE_HOP = 0.01
+
+
+def audio_envelope(audio_path: Path, emphasize_highs: bool = True):
+    import numpy as np
+    import wave
+
+    with wave.open(str(audio_path), "rb") as wav:
+        rate = wav.getframerate()
+        data = np.frombuffer(wav.readframes(wav.getnframes()), dtype=np.int16)
+    samples = data.astype(np.float32) / 32768.0
+    if emphasize_highs:
+        # A diferença entre amostras realça os agudos, reduzindo o peso de
+        # bumbo e baixo: o envelope fica mais próximo da presença da voz.
+        samples = np.diff(samples, prepend=samples[:1])
+    step = max(1, int(rate * LYRIC_ENVELOPE_HOP))
+    count = len(samples) // step
+    if not count:
+        return None
+    frames = samples[: count * step].reshape(count, step)
+    env = np.sqrt((frames ** 2).mean(axis=1))
+    return np.convolve(env, np.ones(5) / 5, mode="same")
+
+
+VOCALS_MODEL_URL = (
+    "https://github.com/TRvlvr/model_repo/releases/download/"
+    "all_public_uvr_models/Kim_Vocal_2.onnx"
+)
+VOCALS_MODEL_PATH = MODELS_DIR / "vocals" / "Kim_Vocal_2.onnx"
+MDX_N_FFT = 7680
+MDX_HOP = 1024
+MDX_DIM_F = 3072
+MDX_DIM_T = 256
+MDX_COMPENSATE = 1.009
+MDX_TRIM = MDX_N_FFT // 2
+MDX_CHUNK = MDX_HOP * (MDX_DIM_T - 1)
+MDX_GEN = MDX_CHUNK - 2 * MDX_TRIM
+
+
+def ensure_vocals_model(emit) -> bool:
+    if VOCALS_MODEL_PATH.is_file():
+        return True
+    try:
+        VOCALS_MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+        request = urllib.request.Request(
+            VOCALS_MODEL_URL, headers={"User-Agent": APP_NAME}
+        )
+        partial = VOCALS_MODEL_PATH.with_suffix(".part")
+        with urllib.request.urlopen(request, timeout=30) as response, partial.open("wb") as f:
+            length = int(response.headers.get("Content-Length") or 0)
+            done = 0
+            while True:
+                block = response.read(1 << 18)
+                if not block:
+                    break
+                f.write(block)
+                done += len(block)
+                pct = f" {done * 100 // length}%" if length else ""
+                emit(f"Baixando o modelo de separação de voz…{pct}", 8)
+        partial.replace(VOCALS_MODEL_PATH)
+        return True
+    except Exception:
+        return False
+
+
+def _mdx_window():
+    import numpy as np
+
+    return 0.5 - 0.5 * np.cos(2 * np.pi * np.arange(MDX_N_FFT) / MDX_N_FFT)
+
+
+def _mdx_stft(chunk, window):
+    import numpy as np
+
+    padded = np.pad(chunk, ((0, 0), (MDX_TRIM, MDX_TRIM)), mode="reflect")
+    frames = np.lib.stride_tricks.sliding_window_view(
+        padded, MDX_N_FFT, axis=1
+    )[:, ::MDX_HOP]
+    return np.fft.rfft(frames * window, axis=2).transpose(0, 2, 1)
+
+
+def _mdx_istft(spec, window):
+    import numpy as np
+
+    frames = np.fft.irfft(spec.transpose(0, 2, 1), n=MDX_N_FFT, axis=2) * window
+    out = np.zeros((2, MDX_CHUNK + MDX_N_FFT))
+    norm = np.zeros(MDX_CHUNK + MDX_N_FFT)
+    squared = window * window
+    for t in range(frames.shape[1]):
+        pos = t * MDX_HOP
+        out[:, pos:pos + MDX_N_FFT] += frames[:, t]
+        norm[pos:pos + MDX_N_FFT] += squared
+    norm[norm < 1e-10] = 1.0
+    return (out / norm)[:, MDX_TRIM:MDX_TRIM + MDX_CHUNK]
+
+
+def separate_vocals_file(mix_path: Path, vocals_path: Path, progress) -> None:
+    """Isola a voz de um WAV estéreo 44.1kHz com o modelo MDX-Net."""
+    import numpy as np
+    import onnxruntime
+    import wave
+
+    with wave.open(str(mix_path), "rb") as wav:
+        data = np.frombuffer(wav.readframes(wav.getnframes()), dtype=np.int16)
+    mix = (data.reshape(-1, 2).T / 32768.0).astype(np.float32)
+    length = mix.shape[1]
+    session = onnxruntime.InferenceSession(
+        str(VOCALS_MODEL_PATH), providers=["CPUExecutionProvider"]
+    )
+    window = _mdx_window()
+    pad = MDX_GEN - (length % MDX_GEN or MDX_GEN)
+    padded = np.concatenate(
+        [np.zeros((2, MDX_TRIM), np.float32), mix,
+         np.zeros((2, pad + MDX_TRIM), np.float32)], axis=1,
+    )
+    chunks = (padded.shape[1] - MDX_CHUNK) // MDX_GEN + 1
+    pieces = []
+    for c in range(chunks):
+        piece = padded[:, c * MDX_GEN:c * MDX_GEN + MDX_CHUNK]
+        if piece.shape[1] < MDX_CHUNK:
+            piece = np.pad(piece, ((0, 0), (0, MDX_CHUNK - piece.shape[1])))
+        spec = _mdx_stft(piece, window)[:, :MDX_DIM_F, :]
+        tensor = np.stack(
+            [spec[0].real, spec[0].imag, spec[1].real, spec[1].imag]
+        ).astype(np.float32)[None]
+        out = session.run(None, {"input": tensor})[0][0]
+        full = np.zeros((2, MDX_N_FFT // 2 + 1, MDX_DIM_T), np.complex128)
+        full[0, :MDX_DIM_F] = out[0] + 1j * out[1]
+        full[1, :MDX_DIM_F] = out[2] + 1j * out[3]
+        pieces.append(_mdx_istft(full, window)[:, MDX_TRIM:MDX_TRIM + MDX_GEN])
+        progress(c + 1, chunks)
+    vocals = np.concatenate(pieces, axis=1)[:, :length] * MDX_COMPENSATE
+    samples = (np.clip(vocals, -1, 1) * 32767).astype(np.int16)
+    with wave.open(str(vocals_path), "wb") as wav:
+        wav.setnchannels(2)
+        wav.setsampwidth(2)
+        wav.setframerate(44100)
+        wav.writeframes(samples.T.reshape(-1).tobytes())
+
+
+def merge_spans(primary: list, secondary: list) -> list:
+    """Completa as âncoras da voz isolada com as do mix que respeitam a ordem."""
+    merged = [list(span) if span else None for span in primary]
+    for index, span in enumerate(secondary):
+        if merged[index] is not None or span is None:
+            continue
+        prev_end = next(
+            (merged[j][1] for j in range(index - 1, -1, -1) if merged[j]), 0.0
+        )
+        next_start = next(
+            (merged[j][0] for j in range(index + 1, len(merged)) if merged[j]), None
+        )
+        if span[0] >= prev_end - 0.3 and (next_start is None or span[1] <= next_start + 0.3):
+            merged[index] = list(span)
+    return merged
+
+
+def refine_lyric_starts(captions: list[dict], env) -> list[dict]:
+    """Empurra para a frente versos que "começam" em região quieta do áudio.
+
+    O Whisper tende a adiantar o início dos versos cantados; quando o som
+    naquele instante ainda está baixo, o início é movido para a primeira
+    subida sustentada de energia. Nunca move para trás.
+    """
+    import numpy as np
+
+    if env is None or not len(env):
+        return captions
+    hop = LYRIC_ENVELOPE_HOP
+    thresholds = envelope_thresholds(env)
+    if not thresholds:
+        return captions
+    _, loud = thresholds
+    for index, cap in enumerate(captions):
+        start, end = cap["start"], cap["end"]
+        horizon = min(start + 2.5, end - 0.2)
+        w0, w1 = int(max(0.0, start) / hop), int(horizon / hop)
+        if w1 <= w0 or w0 >= len(env):
+            continue
+        if env[min(w0, len(env) - 1)] >= loud * 0.8:
+            continue
+        onset = None
+        run = 0
+        for k in range(w0, min(w1, len(env))):
+            run = run + 1 if env[k] >= loud else 0
+            if run >= 8:
+                onset = (k - run + 1) * hop
+                break
+        if onset is not None and onset > start + 0.15:
+            floor = captions[index - 1]["end"] if index else 0.0
+            cap["start"] = round(min(max(floor, onset - 0.1), end - 0.3), 3)
+    return captions
+
+
+def extend_lyric_ends(captions: list[dict], total: float) -> list[dict]:
+    # Notas sustentadas duram mais do que o Whisper marca: cada verso
+    # permanece na tela até o próximo começar (estilo karaokê).
+    for current, following in zip(captions, captions[1:]):
+        gap = following["start"] - current["end"]
+        if 0 < gap <= 2.0:
+            current["end"] = following["start"]
+        elif gap > 2.0:
+            current["end"] = round(current["end"] + 0.8, 3)
+    if captions:
+        last = captions[-1]
+        last["end"] = round(min(last["end"] + 1.2, max(total, last["end"])), 3)
     return captions
 
 
@@ -396,51 +677,118 @@ class Engine:
             video, "transcribe", "Transcrevendo em português", CAPTION_MAX_CHARS
         )
 
+    def _extract_audio(self, source: Path, dest: Path, channels: int, rate: int):
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-i", str(source), "-vn", "-ac", str(channels),
+             "-ar", str(rate), "-c:a", "pcm_s16le", str(dest)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+        if result.returncode:
+            raise RuntimeError("Não consegui extrair o áudio desse vídeo.")
+
     def sync_lyrics(self, video: Path, lyrics: str) -> list[dict]:
         lines = lyric_lines(lyrics)
         if not lines:
             raise RuntimeError("A letra está vazia.")
         self.ensure_tools()
         with tempfile.TemporaryDirectory(prefix="din-subtitler-") as td:
-            audio = Path(td) / "audio.wav"
-            self.emit("Extraindo áudio…", 8)
-            result = subprocess.run(
-                ["ffmpeg", "-y", "-i", str(video), "-vn", "-ac", "1", "-ar", "16000",
-                 "-c:a", "pcm_s16le", str(audio)],
-                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-            )
-            if result.returncode:
-                raise RuntimeError("Não consegui extrair o áudio desse vídeo.")
+            folder = Path(td)
+            mix = folder / "mix.wav"
+            self.emit("Extraindo áudio…", 3)
+            self._extract_audio(video, mix, 1, 16000)
+            # A voz isolada dá tempos muito mais precisos; o mix completo
+            # continua como apoio para versos que a separação perde.
+            vocals = None
+            if ensure_vocals_model(self.emit):
+                try:
+                    mix44 = folder / "mix44.wav"
+                    self._extract_audio(video, mix44, 2, 44100)
+                    vocals44 = folder / "vocals44.wav"
+                    self.emit("Separando a voz do instrumental…", 12)
+                    separate_vocals_file(mix44, vocals44, lambda done, count: self.emit(
+                        f"Separando a voz do instrumental… {done}/{count}",
+                        12 + round(done / count * 30),
+                    ))
+                    vocals = folder / "vocals.wav"
+                    self._extract_audio(vocals44, vocals, 1, 16000)
+                except Exception:
+                    vocals = None
             from faster_whisper import WhisperModel
 
             def run(device, compute):
                 model = WhisperModel(str(MODELS_DIR / "whisper"), device=device, compute_type=compute)
-                segs, info = model.transcribe(
-                    str(audio), task="transcribe", vad_filter=True,
-                    beam_size=5, condition_on_previous_text=False, word_timestamps=True,
-                )
-                total = max(info.duration, 0.001)
-                words = []
-                for s in segs:
-                    for w in s.words or []:
-                        words.append({"word": w.word, "start": float(w.start), "end": float(w.end)})
-                    pct = 20 + round(min(1.0, s.end / total) * 70)
-                    self.emit(f"Ouvindo a música… {int(s.end)}s / {int(total)}s", pct)
+
+                def listen(audio, vad, label, lo, hi):
+                    kwargs = dict(
+                        task="transcribe", beam_size=5, condition_on_previous_text=False,
+                        word_timestamps=True, no_speech_threshold=0.8,
+                    )
+                    if vad == "default":
+                        kwargs.update(vad_filter=True)
+                    elif vad:
+                        kwargs.update(vad_filter=True, vad_parameters=dict(
+                            threshold=vad, min_silence_duration_ms=300,
+                            speech_pad_ms=300,
+                        ))
+                    else:
+                        kwargs.update(vad_filter=False)
+                    segs, info = model.transcribe(str(audio), **kwargs)
+                    total = max(info.duration, 0.001)
+                    words = []
+                    for s in segs:
+                        for j, w in enumerate(s.words or []):
+                            words.append({
+                                "word": w.word, "start": float(w.start), "end": float(w.end),
+                                "first": j == 0,
+                            })
+                        pct = lo + round(min(1.0, s.end / total) * (hi - lo))
+                        self.emit(f"{label}… {int(s.end)}s / {int(total)}s", pct)
+                    return words, total
+
+                vocal_words = []
+                if vocals is not None:
+                    vocal_words, total = listen(vocals, "default", "Ouvindo a voz isolada", 45, 65)
+                if vocal_words:
+                    # Com a voz isolada como fonte principal, o mix completo
+                    # sem filtro serve de apoio para versos perdidos.
+                    mix_words, total = listen(mix, None, "Conferindo na música completa", 65, 85)
+                else:
+                    # No mix, o VAD tolerante (0.2) mantém canto que o limiar
+                    # padrão descartaria como "não-fala".
+                    mix_words, total = listen(mix, 0.2, "Ouvindo a música", 65, 85)
+                    if not mix_words:
+                        mix_words, total = listen(mix, None, "Ouvindo sem filtro de voz", 65, 85)
                 del model
                 gc.collect()
-                return words, total
+                return vocal_words, mix_words, total
 
             try:
-                self.emit("Ouvindo a música com a GPU…", 20)
-                words, total = run("cuda", "float16")
+                self.emit("Ouvindo a música com a GPU…", 44)
+                vocal_words, mix_words, total = run("cuda", "float16")
             except Exception:
-                self.emit("Ouvindo a música pela CPU…", 20)
-                words, total = run("cpu", "int8")
-        if not words:
+                self.emit("Ouvindo a música pela CPU…", 44)
+                vocal_words, mix_words, total = run("cpu", "int8")
+            try:
+                env = (
+                    audio_envelope(vocals, emphasize_highs=False)
+                    if vocals is not None else audio_envelope(mix)
+                )
+            except Exception:
+                env = None
+        if not vocal_words and not mix_words:
             raise RuntimeError("Não encontrei voz cantada nesse vídeo.")
         self.emit("Sincronizando os versos…", 95)
-        captions = captions_from_lyrics(lines, align_lyrics_to_words(lines, words), total)
+        if vocal_words:
+            spans = merge_spans(
+                align_lyrics_to_words(lines, vocal_words),
+                align_lyrics_to_words(lines, mix_words),
+            )
+        else:
+            spans = align_lyrics_to_words(lines, mix_words)
+        captions = captions_from_lyrics(lines, spans, total, env)
+        captions = refine_lyric_starts(captions, env)
+        captions = extend_lyric_ends(captions, total)
         self.emit(f"{len(captions)} versos sincronizados.", 100)
         return captions
 
@@ -651,7 +999,9 @@ class LyricsDialog(QDialog):
         layout.setSpacing(8)
         layout.addWidget(QLabel(
             "Informe o artista e a música para buscar a letra na internet,\n"
-            "ou cole a letra diretamente no campo abaixo."
+            "ou cole a letra diretamente no campo abaixo.\n"
+            "Na primeira sincronização, um modelo de separação de voz\n"
+            "(~64 MB) é baixado para melhorar a precisão dos tempos."
         ))
         form = QHBoxLayout()
         self.artist_edit = QLineEdit(placeholderText="Artista ou banda")
@@ -2205,7 +2555,11 @@ class MainWindow(QMainWindow):
         )
         text = wrap_caption(text)
         font = QFont(self.font_box.currentFont())
-        font.setPixelSize(self.font_size.value())
+        # O tamanho é definido em relação a um vídeo Full HD: sem a escala,
+        # a mesma fonte ficaria minúscula em vídeos verticais (1080x1920).
+        rect = self.video_scene.sceneRect()
+        scale = rect.height() / 1080 if rect.height() > 0 else 1.0
+        font.setPixelSize(max(8, round(self.font_size.value() * scale)))
         font.setWeight(QFont.Weight.DemiBold)
         self.subtitle_overlay.setFont(font)
         safe = html.escape(text).replace("\n", "<br>")

@@ -18,7 +18,7 @@ O Whisper escuta diretamente o áudio em português e cria uma faixa de legendas
 
 ### Letra de música sincronizada
 
-Para vídeos de alguém cantando uma música. Você informa o artista e o nome da música, o programa busca a letra oficial na internet (via [LRCLIB](https://lrclib.net)) e mostra o texto para revisão — também é possível colar a letra manualmente. Ao sincronizar, o Whisper escuta o áudio do vídeo e cada verso da letra é posicionado no momento em que é cantado. Versos que o áudio não deixou claros são distribuídos entre os vizinhos e podem ser ajustados na waveform.
+Para vídeos de alguém cantando uma música. Você informa o artista e o nome da música, o programa busca a letra oficial na internet (via [LRCLIB](https://lrclib.net)) e mostra o texto para revisão — também é possível colar a letra manualmente. Ao sincronizar, a voz é isolada do instrumental com um modelo de separação vocal (MDX-Net, baixado uma única vez, ~64 MB), o Whisper escuta a voz isolada e cada verso da letra é posicionado no momento em que é cantado. Versos que o áudio não deixou claros são posicionados pela presença de voz no intervalo e podem ser ajustados na waveform.
 
 As faixas ficam disponíveis em abas separadas. Você pode editar, juntar, separar, excluir e ajustar os tempos de cada uma independentemente. Quando terminar, pode salvar a faixa portuguesa como `.pt.srt`, a inglesa como `.en.srt` e a letra como `.letra.srt`.
 
