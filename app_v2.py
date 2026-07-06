@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import traceback
 import unicodedata
 import urllib.parse
@@ -1062,7 +1063,28 @@ def gpu_components_ready() -> bool:
     )
 
 
-def download_nvidia_package(package: str):
+def human_size(size: float) -> str:
+    units = ["B", "KB", "MB", "GB", "TB"]
+    index = 0
+    while size >= 1024 and index < len(units) - 1:
+        size /= 1024
+        index += 1
+    text = f"{size:.1f}" if size < 10 and index >= 2 else f"{size:.0f}"
+    return f"{text.replace('.', ',')} {units[index]}"
+
+
+def human_eta(seconds: float) -> str:
+    seconds = int(seconds)
+    if seconds < 60:
+        return f"{seconds} s"
+    minutes = round(seconds / 60)
+    if minutes < 60:
+        return f"{minutes} min"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours} h {minutes:02d} min" if minutes else f"{hours} h"
+
+
+def download_nvidia_package(package: str, report=None):
     import json
     with urllib.request.urlopen(
         f"https://pypi.org/pypi/{package}/json", timeout=30
@@ -1077,9 +1099,14 @@ def download_nvidia_package(package: str):
     )
     if not wheel:
         raise RuntimeError(f"Não encontrei o componente Windows de {package}.")
+
+    def hook(blocks, block_size, total_size):
+        if report and total_size > 0:
+            report(min(blocks * block_size, total_size), total_size)
+
     with tempfile.TemporaryDirectory(prefix="din-gpu-") as directory:
         wheel_path = Path(directory) / wheel["filename"]
-        urllib.request.urlretrieve(wheel["url"], wheel_path)
+        urllib.request.urlretrieve(wheel["url"], wheel_path, hook if report else None)
         with zipfile.ZipFile(wheel_path) as archive:
             members = [
                 name for name in archive.namelist()
@@ -1088,22 +1115,99 @@ def download_nvidia_package(package: str):
             archive.extractall(BIN_DIR, members)
 
 
+WHISPER_REPO = "Systran/faster-whisper-large-v3"
+
+
+def download_whisper_model(report):
+    """Baixa os arquivos do modelo direto do Hugging Face informando o
+    progresso em bytes via report(done, total) — o download_model do
+    faster_whisper desabilita qualquer indicação de progresso."""
+    from huggingface_hub import HfApi
+    wanted = ("config.json", "preprocessor_config.json", "model.bin", "tokenizer.json")
+    info = HfApi().model_info(WHISPER_REPO, files_metadata=True)
+    files = [
+        sibling for sibling in info.siblings
+        if sibling.rfilename in wanted or sibling.rfilename.startswith("vocabulary.")
+    ]
+    if not files or any(not sibling.size for sibling in files):
+        raise RuntimeError("Não consegui listar os arquivos do modelo.")
+    target = MODELS_DIR / "whisper"
+    target.mkdir(parents=True, exist_ok=True)
+    total = sum(sibling.size for sibling in files)
+    done = 0
+    for sibling in files:
+        dest = target / sibling.rfilename
+        if dest.is_file() and dest.stat().st_size == sibling.size:
+            done += sibling.size
+            report(done, total)
+            continue
+        url = f"https://huggingface.co/{WHISPER_REPO}/resolve/main/{sibling.rfilename}"
+        request = urllib.request.Request(url, headers={"User-Agent": APP_NAME})
+        partial = dest.with_name(dest.name + ".part")
+        with urllib.request.urlopen(request, timeout=60) as response, open(partial, "wb") as out:
+            while True:
+                chunk = response.read(256 * 1024)
+                if not chunk:
+                    break
+                out.write(chunk)
+                done += len(chunk)
+                report(done, total)
+        partial.replace(dest)
+
+
 class ModelDownloadWorker(QObject):
     finished = Signal()
     failed = Signal(str)
+    progress = Signal(int, str)  # percentual (-1 = indeterminado), texto de status
 
     def __init__(self, include_gpu: bool):
         super().__init__()
         self.include_gpu = include_gpu
+        self.stage = ""
+        self.stage_start = 0.0
+        self.last_emit = 0.0
+
+    def begin_stage(self, text: str):
+        self.stage = text
+        self.stage_start = time.monotonic()
+        self.last_emit = 0.0
+        self.progress.emit(-1, text)
+
+    def report(self, done: int, total: int):
+        now = time.monotonic()
+        if now - self.last_emit < 0.3:
+            return
+        self.last_emit = now
+        percent = min(100, int(done * 100 / total)) if total > 0 else -1
+        if percent < 0:
+            self.progress.emit(-1, self.stage)
+            return
+        parts = [f"{human_size(done)} de {human_size(total)}"]
+        elapsed = now - self.stage_start
+        if elapsed > 3 and done > 0:
+            speed = done / elapsed
+            parts.append(f"{human_size(speed)}/s")
+            if speed > 0 and done < total:
+                parts.append(f"~{human_eta((total - done) / speed)} restantes")
+        self.progress.emit(percent, f"{self.stage} {percent}% · " + " · ".join(parts))
 
     def run(self):
         try:
-            from faster_whisper.utils import download_model
             MODELS_DIR.mkdir(parents=True, exist_ok=True)
-            download_model("large-v3", output_dir=str(MODELS_DIR / "whisper"))
+            if not model_is_ready():
+                self.begin_stage("Baixando o modelo Whisper…")
+                try:
+                    download_whisper_model(self.report)
+                except Exception:
+                    # Plano B sem progresso: o download oficial do faster_whisper.
+                    self.begin_stage("Baixando o modelo… Isso pode levar alguns minutos.")
+                    from faster_whisper.utils import download_model
+                    download_model("large-v3", output_dir=str(MODELS_DIR / "whisper"))
             if self.include_gpu and not gpu_components_ready():
-                download_nvidia_package("nvidia-cublas-cu12")
-                download_nvidia_package("nvidia-cudnn-cu12")
+                packages = ("nvidia-cublas-cu12", "nvidia-cudnn-cu12")
+                for step, package in enumerate(packages, start=1):
+                    self.begin_stage(f"Baixando a aceleração NVIDIA ({step}/{len(packages)})…")
+                    download_nvidia_package(package, self.report)
             if not model_is_ready():
                 raise RuntimeError("O download terminou, mas os arquivos do modelo estão incompletos.")
             self.finished.emit()
@@ -1160,11 +1264,12 @@ class ComponentSetupDialog(QDialog):
         self.later_btn.setEnabled(False)
         self.progress.setVisible(True)
         self.progress.setRange(0, 0)
-        self.status.setText("Baixando o modelo… Isso pode levar alguns minutos.")
+        self.status.setText("Preparando o download…")
         self.thread = QThread(self)
         self.worker = ModelDownloadWorker(self.gpu_checkbox.isChecked())
         self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.run)
+        self.worker.progress.connect(self.download_progress)
         self.worker.finished.connect(self.download_finished)
         self.worker.failed.connect(self.download_failed)
         self.worker.finished.connect(self.thread.quit)
@@ -1172,6 +1277,14 @@ class ComponentSetupDialog(QDialog):
         self.thread.finished.connect(self.worker.deleteLater)
         self.thread.finished.connect(self.thread.deleteLater)
         self.thread.start()
+
+    def download_progress(self, percent: int, text: str):
+        if percent < 0:
+            self.progress.setRange(0, 0)
+        else:
+            self.progress.setRange(0, 100)
+            self.progress.setValue(percent)
+        self.status.setText(text)
 
     def download_finished(self):
         activate_gpu_dlls()
@@ -1487,6 +1600,7 @@ class WaveformWidget(QWidget):
         self.drag_index = -1
         self.drag_origin = 0.0
         self.original = None
+        self.group_original: dict[int, tuple[float, float]] = {}
         self.selected_indices: set[int] = set()
         self.editing_index = -1
         self.rubber_start = None
