@@ -1372,12 +1372,15 @@ class WaveformWidget(QWidget):
             "Arrastar rodinha: navegar"
         )
 
-    def set_waveform(self, peaks: list[float], duration: float):
+    def set_waveform(self, peaks: list[float], duration: float, preserve_view: bool = False):
         self.peaks = peaks
         self.peak_norm = max(max(peaks, default=0.0), 0.05)
         self.duration = max(.1, duration)
-        self.view_start = 0.0
-        self.zoom = 1.0
+        if preserve_view:
+            self.view_start = max(0.0, min(self.view_start, self.duration - self.visible_duration()))
+        else:
+            self.view_start = 0.0
+            self.zoom = 1.0
         self.viewChanged.emit()
         self.update()
 
@@ -1835,8 +1838,8 @@ class WaveformPanel(QWidget):
         self.waveform.viewChanged.connect(self.sync_scrollbar)
         self.scrollbar.valueChanged.connect(self.on_scrollbar)
 
-    def set_waveform(self, peaks: list[float], duration: float):
-        self.waveform.set_waveform(peaks, duration)
+    def set_waveform(self, peaks: list[float], duration: float, preserve_view: bool = False):
+        self.waveform.set_waveform(peaks, duration, preserve_view)
 
     def set_captions(self, captions: list[dict]):
         self.waveform.set_captions(captions)
@@ -2730,11 +2733,11 @@ class MainWindow(QMainWindow):
             if self.vocals_waveform is None:
                 self.load_waveform(self.vocals_path, self.vocalsWaveformReady)
             else:
-                self.waveform.set_waveform(*self.vocals_waveform)
+                self.waveform.set_waveform(*self.vocals_waveform, preserve_view=True)
         else:
             self.vocals_player.pause()
             if self.original_waveform is not None:
-                self.waveform.set_waveform(*self.original_waveform)
+                self.waveform.set_waveform(*self.original_waveform, preserve_view=True)
 
     def original_waveform_ready(self, peaks, duration):
         self.original_waveform = (peaks, duration)
@@ -2744,7 +2747,7 @@ class MainWindow(QMainWindow):
     def vocals_waveform_ready(self, peaks, duration):
         self.vocals_waveform = (peaks, duration)
         if self.isolated_active:
-            self.waveform.set_waveform(peaks, duration)
+            self.waveform.set_waveform(peaks, duration, preserve_view=True)
 
     def update_subtitle_preview(self):
         if self.subtitle_overlay.editing:
