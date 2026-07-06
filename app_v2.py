@@ -3,7 +3,6 @@ from __future__ import annotations
 import difflib
 import gc
 import ctypes
-import hashlib
 import html
 import json
 import os
@@ -47,13 +46,6 @@ BUNDLE_ROOT = Path(getattr(sys, "_MEIPASS", ROOT))
 MODELS_DIR = ROOT / "models"
 BIN_DIR = BUNDLE_ROOT if FROZEN else ROOT / "bin"
 CRASH_LOG = ROOT / "crash.log"
-VOCALS_CACHE_DIR = ROOT / "cache" / "vocals"
-
-
-def vocals_cache_path(video: Path) -> Path:
-    stat = video.stat()
-    key = hashlib.sha1(f"{video.resolve()}|{stat.st_size}|{stat.st_mtime}".encode()).hexdigest()
-    return VOCALS_CACHE_DIR / f"{key}.wav"
 VIDEO_TYPES = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".mpeg", ".mpg", ".wmv"}
 os.environ["PATH"] = str(BIN_DIR) + os.pathsep + os.environ.get("PATH", "")
 _DLL_HANDLES = []
@@ -755,7 +747,12 @@ class Engine:
         if result.returncode:
             raise RuntimeError("Não consegui extrair o áudio desse vídeo.")
 
-    def sync_lyrics(self, video: Path, lyrics: str) -> tuple[list[dict], Path | None]:
+    def sync_lyrics(
+        self, video: Path, lyrics: str, vocals_output: Path
+    ) -> tuple[list[dict], Path | None]:
+        """`vocals_output` é um caminho temporário de sessão (não persistente)
+        onde a voz isolada é salva, para o usuário poder ouvi-la e revisar a
+        waveform dela; cabe ao chamador apagá-lo quando não precisar mais."""
         lines = lyric_lines(lyrics)
         if not lines:
             raise RuntimeError("A letra está vazia.")
@@ -781,13 +778,10 @@ class Engine:
                     ))
                     vocals = folder / "vocals.wav"
                     self._extract_audio(vocals44, vocals, 1, 16000)
-                    # A voz isolada é guardada para o usuário poder ouvi-la
-                    # e usar a waveform dela para revisar a sincronização.
                     try:
-                        VOCALS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-                        cache_path = vocals_cache_path(video)
-                        shutil.copyfile(vocals44, cache_path)
-                        saved_vocals_path = cache_path
+                        vocals_output.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copyfile(vocals44, vocals_output)
+                        saved_vocals_path = vocals_output
                     except Exception:
                         saved_vocals_path = None
                 except Exception:
@@ -2194,6 +2188,12 @@ class MainWindow(QMainWindow):
         self.loading_first_frame = False
         self.user_muted = False
         self.vocals_path: Path | None = None
+        self.vocals_counter = 0
+        # Voz isolada é temporária: fica num diretório da sessão, apagado ao
+        # trocar de vídeo e ao fechar o programa, nunca persistida em disco.
+        self.session_temp_dir = Path(
+            tempfile.mkdtemp(prefix="din-subtitler-session-")
+        )
         self.original_waveform: tuple[list[float], float] | None = None
         self.vocals_waveform: tuple[list[float], float] | None = None
         self.isolated_active = False
@@ -2576,6 +2576,11 @@ class MainWindow(QMainWindow):
         self.open_lyric_btn.setEnabled(not self.busy)
         self.save_lyric_btn.setEnabled(bool(self.lyric))
 
+    def closeEvent(self, event):
+        self.discard_vocals_audio()
+        shutil.rmtree(self.session_temp_dir, ignore_errors=True)
+        super().closeEvent(event)
+
     def dragEnterEvent(self, e):
         if e.mimeData().hasUrls() and not self.busy:
             e.acceptProposedAction()
@@ -2695,6 +2700,22 @@ class MainWindow(QMainWindow):
             self.isolated_toggle.setEnabled(False)
         else:
             self.isolated_toggle.setEnabled(True)
+
+    def new_vocals_output_path(self) -> Path:
+        self.vocals_counter += 1
+        return self.session_temp_dir / f"vocals_{self.vocals_counter}.wav"
+
+    def discard_vocals_audio(self):
+        # Solta o arquivo antes de apagá-lo, senão o Windows recusa por
+        # ainda estar aberto no player.
+        self.vocals_player.stop()
+        self.vocals_player.setSource(QUrl())
+        if self.vocals_path is not None:
+            try:
+                self.vocals_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        self.set_vocals_path(None)
 
     def toggle_isolated_audio(self, checked: bool):
         self.isolated_active = bool(checked) and self.vocals_path is not None
@@ -2889,17 +2910,8 @@ class MainWindow(QMainWindow):
         self.file_label.setText(f"<b>{path.name}</b><br>{path.stat().st_size / 1048576:.1f} MB")
         self.loading_first_frame = True
         self.player.setSource(QUrl.fromLocalFile(str(path)))
-        self.vocals_player.stop()
-        self.vocals_player.setSource(QUrl())
+        self.discard_vocals_audio()
         self.original_waveform = None
-        cached_vocals = None
-        try:
-            candidate = vocals_cache_path(path)
-            if candidate.is_file():
-                cached_vocals = candidate
-        except OSError:
-            cached_vocals = None
-        self.set_vocals_path(cached_vocals)
         self.waveform.set_captions([])
         self.waveform.set_waveform([], 1.0)
         self.load_waveform(path, self.waveformReady)
@@ -3091,12 +3103,11 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         video, lyrics = self.video, dialog.lyrics
-        # Libera o arquivo da voz isolada antes de regravá-lo, para o
-        # Windows não bloquear a sobrescrita por ainda estar em reprodução.
-        self.vocals_player.stop()
-        self.vocals_player.setSource(QUrl())
-        self.set_vocals_path(None)
-        self.run_job(lambda emit: ("lyric", Engine(emit).sync_lyrics(video, lyrics)))
+        self.discard_vocals_audio()
+        vocals_output = self.new_vocals_output_path()
+        self.run_job(
+            lambda emit: ("lyric", Engine(emit).sync_lyrics(video, lyrics, vocals_output))
+        )
 
     def save(self, language):
         editor = self.editor_for(language)
