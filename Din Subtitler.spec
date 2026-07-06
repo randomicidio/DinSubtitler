@@ -7,6 +7,7 @@ project = Path(SPECPATH)
 datas, binaries, hiddenimports = collect_all("faster_whisper")
 
 binaries.append((str(project / "bin" / "ffmpeg.exe"), "."))
+datas.append((str(project / "assets" / "app_icon.ico"), "assets"))
 
 a = Analysis(
     [str(project / "app_v2.py")],
@@ -40,6 +41,7 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     contents_directory="components",
+    icon=str(project / "assets" / "app_icon.ico"),
 )
 
 coll = COLLECT(

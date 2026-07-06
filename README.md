@@ -75,6 +75,7 @@ executar ou modificar o código-fonte.
 - `Enter` ou duplo clique: editar o texto do trecho selecionado
 - `F4`: juntar dois trechos consecutivos selecionados
 - `F5`: separar um trecho na posição do cursor
+- `S`: separar o trecho sob o cursor de reprodução, dividindo o texto de forma inteligente pela pontuação mais próxima do meio
 - `Delete`: excluir os trechos selecionados
 - `Shift + Enter`: inserir uma quebra de linha manual
 - Rodinha do mouse sobre a waveform: aplicar zoom

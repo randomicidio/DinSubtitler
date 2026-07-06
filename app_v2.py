@@ -110,6 +110,29 @@ def editor_time(seconds: float) -> str:
     return srt_time(seconds).replace(",", ".")
 
 
+def smart_split_text(text: str) -> tuple[str, str]:
+    """Divide o texto em duas partes num ponto de pontuação próximo do meio.
+
+    Sem pontuação utilizável, devolve o texto inteiro nas duas metades para
+    o usuário ajustar manualmente depois.
+    """
+    flat = clean(text)
+    middle = len(flat) / 2
+    candidates = []
+    for match in re.finditer(r"[.!?…,;:]+\s+", flat):
+        cut = match.end()
+        left, right = flat[:cut].strip(), flat[cut:].strip()
+        if not left or not right:
+            continue
+        strong = match.group()[0] in ".!?…"
+        weight = 1.0 if strong else 2.0
+        candidates.append((abs(cut - middle) * weight, left, right))
+    if candidates:
+        _score, left, right = min(candidates)
+        return left.rstrip(",;:"), right
+    return flat, flat
+
+
 def read_srt(path: Path) -> list[dict]:
     raw = None
     for encoding in ("utf-8-sig", "utf-8", "cp1252"):
@@ -2237,6 +2260,21 @@ class SubtitleEditor(QWidget):
         self.changed.emit()
         return True
 
+    def split_at_time(self, seconds: float) -> bool:
+        margin = 0.05
+        for row, c in enumerate(self.captions):
+            if c["start"] + margin <= seconds <= c["end"] - margin:
+                left, right = smart_split_text(c["text"])
+                self.push_undo()
+                self.captions[row:row + 1] = [
+                    {"start": c["start"], "end": seconds, "text": left},
+                    {"start": seconds, "end": c["end"], "text": right},
+                ]
+                self.refresh(row)
+                self.changed.emit()
+                return True
+        return False
+
     def split(self):
         row = self.table.currentRow()
         if row < 0:
@@ -2735,6 +2773,15 @@ class MainWindow(QMainWindow):
                 return True
         if (
             event.type() == QEvent.Type.KeyPress
+            and event.key() == Qt.Key.Key_S
+            and not event.modifiers()
+        ):
+            focus = QApplication.focusWidget()
+            if not isinstance(focus, (QLineEdit, QPlainTextEdit)) and not self.subtitle_overlay.editing:
+                self.split_at_playhead()
+                return True
+        if (
+            event.type() == QEvent.Type.KeyPress
             and event.key() == Qt.Key.Key_Z
             and event.modifiers() & Qt.KeyboardModifier.ControlModifier
         ):
@@ -2945,6 +2992,13 @@ class MainWindow(QMainWindow):
         editor = self.active_editor()
         editor.push_undo()
         self.waveform.waveform.set_editing_index(editor.table.currentRow())
+
+    def split_at_playhead(self):
+        seconds = self.player.position() / 1000
+        if self.active_editor().split_at_time(seconds):
+            self.status.setText("Trecho dividido no cursor de reprodução")
+        else:
+            self.status.setText("Nenhum trecho sob o cursor de reprodução")
 
     def trigger_split(self):
         if self.subtitle_overlay.editing:
@@ -3263,6 +3317,9 @@ class MainWindow(QMainWindow):
 
 
 def make_app_icon() -> QIcon:
+    ico_path = BUNDLE_ROOT / "assets" / "app_icon.ico"
+    if ico_path.exists():
+        return QIcon(str(ico_path))
     icon = QIcon()
     for size in (16, 24, 32, 48, 64, 128, 256):
         pm = QPixmap(size, size)
