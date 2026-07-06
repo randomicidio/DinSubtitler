@@ -1794,15 +1794,26 @@ class WaveformWidget(QWidget):
     EDGE_PX = 12
     MIN_GAP = 0.05
 
+    def boundary_partner(self, index: int):
+        """Índice do bloco cujo início coincide com o fim do bloco `index`,
+        sem depender de os dois serem vizinhos na lista."""
+        end = self.captions[index]["end"]
+        for j, other in enumerate(self.captions):
+            if j != index and abs(other["start"] - end) < 1e-3:
+                return j
+        return None
+
     def hit_segment(self, x, y):
         if y < self.block_top_px():
             return -1, None
-        for i in range(len(self.captions) - 1):
-            a, b = self.captions[i], self.captions[i + 1]
-            if abs(a["end"] - b["start"]) < 1e-3:
-                bx = self.time_to_x(a["end"])
-                if abs(x - bx) <= self.BOUNDARY_PX:
-                    return i, "boundary"
+        boundary = None
+        for i, c in enumerate(self.captions):
+            distance = abs(x - self.time_to_x(c["end"]))
+            if distance <= self.BOUNDARY_PX and (boundary is None or distance < boundary[0]):
+                if self.boundary_partner(i) is not None:
+                    boundary = (distance, i)
+        if boundary is not None:
+            return boundary[1], "boundary"
         edge_hits = []
         for i, c in enumerate(self.captions):
             x1, x2 = self.time_to_x(c["start"]), self.time_to_x(c["end"])
@@ -1864,6 +1875,16 @@ class WaveformWidget(QWidget):
         elif (
             event.button() == Qt.MouseButton.LeftButton
             and
+            modifiers & Qt.KeyboardModifier.ControlModifier
+            and index >= 0
+        ):
+            # Ctrl+clique num bloco alterna sua presença na seleção múltipla,
+            # sem iniciar arraste nem substituir a seleção atual.
+            self.selected_indices.symmetric_difference_update({index})
+            self.selectionChanged.emit(sorted(self.selected_indices))
+        elif (
+            event.button() == Qt.MouseButton.LeftButton
+            and
             modifiers & Qt.KeyboardModifier.AltModifier
             and index >= 0
             and mode != "boundary"
@@ -1878,6 +1899,22 @@ class WaveformWidget(QWidget):
             self.original = [deepcopy(self.captions[i]) for i in indices]
             self.preview_blocks = deepcopy(self.original)
             self.drag_index = index
+        elif (
+            event.button() == Qt.MouseButton.LeftButton
+            and mode == "move"
+            and index in self.selected_indices
+            and len(self.selected_indices) > 1
+        ):
+            # Arrasta todos os blocos selecionados em conjunto, preservando a
+            # seleção (não emite segmentSelected, que colapsaria para um só).
+            self.segmentEditStarted.emit()
+            self.drag_mode = "move_group"
+            self.drag_index = index
+            self.drag_origin = time_at_mouse
+            self.group_original = {
+                i: (self.captions[i]["start"], self.captions[i]["end"])
+                for i in self.selected_indices
+            }
         elif event.button() == Qt.MouseButton.LeftButton and index >= 0:
             self.segmentEditStarted.emit()
             self.drag_index, self.drag_mode = index, mode
@@ -1952,15 +1989,36 @@ class WaveformWidget(QWidget):
                 }
                 for c in self.original
             ]
+        elif self.drag_mode == "move_group":
+            others = [
+                (c["start"], c["end"])
+                for i, c in enumerate(self.captions)
+                if i not in self.group_original
+            ]
+            delta_min = -min(s0 for s0, _ in self.group_original.values())
+            delta_max = self.duration - max(s1 for _, s1 in self.group_original.values())
+            for s0, s1 in self.group_original.values():
+                for n0, n1 in others:
+                    if s0 >= n1:            # bloco não selecionado à esquerda
+                        delta_min = max(delta_min, n1 - s0)
+                    elif s1 <= n0:          # bloco não selecionado à direita
+                        delta_max = min(delta_max, n0 - s1)
+            delta = max(delta_min, min(now - self.drag_origin, delta_max))
+            for i, (s0, s1) in self.group_original.items():
+                self.captions[i]["start"] = s0 + delta
+                self.captions[i]["end"] = s1 + delta
+                self.segmentChanged.emit(i)
         elif self.drag_mode == "boundary":
             i = self.drag_index
-            a, b = self.captions[i], self.captions[i + 1]
-            lower, upper = a["start"] + self.MIN_GAP, b["end"] - self.MIN_GAP
-            t = max(lower, min(now, upper))
-            a["end"] = t
-            b["start"] = t
-            self.segmentChanged.emit(i)
-            self.segmentChanged.emit(i + 1)
+            j = self.boundary_partner(i)
+            if j is not None:
+                a, b = self.captions[i], self.captions[j]
+                lower, upper = a["start"] + self.MIN_GAP, b["end"] - self.MIN_GAP
+                t = max(lower, min(now, upper))
+                a["end"] = t
+                b["start"] = t
+                self.segmentChanged.emit(i)
+                self.segmentChanged.emit(j)
         elif self.drag_index >= 0:
             c = self.captions[self.drag_index]
             lower_bound, upper_bound = self.neighbor_bounds(self.drag_index)
@@ -1997,6 +2055,7 @@ class WaveformWidget(QWidget):
         self.drag_mode = None
         self.drag_index = -1
         self.original = None
+        self.group_original = {}
         self.rubber_start = None
         self.rubber_end = None
         self.preview_blocks = []
@@ -2374,11 +2433,11 @@ class SubtitleEditor(QWidget):
         self.changed.emit()
         return True
 
-    def split_at_time(self, seconds: float) -> bool:
+    def split_at_time(self, seconds: float, smart: bool = True) -> bool:
         margin = 0.05
         for row, c in enumerate(self.captions):
             if c["start"] + margin <= seconds <= c["end"] - margin:
-                left, right = smart_split_text(c["text"])
+                left, right = smart_split_text(c["text"]) if smart else (c["text"], c["text"])
                 self.push_undo()
                 self.captions[row:row + 1] = [
                     {"start": c["start"], "end": seconds, "text": left},
@@ -2402,8 +2461,13 @@ class SubtitleEditor(QWidget):
             return
         raw = editor.toPlainText()
         pos = editor.textCursor().position()
-        if not self.split_row(row, raw[:pos], raw[pos:]):
+        if not (clean_lines(raw[:pos]) and clean_lines(raw[pos:])):
             QMessageBox.information(self, APP_NAME, "Posicione o cursor entre duas partes do texto.")
+            return
+        # Fecha o editor da célula antes de reconstruir a tabela, para sair do
+        # modo de edição (senão o bloco continuaria destacado em azul).
+        self.caption_delegate.closeEditor.emit(editor, QStyledItemDelegate.EndEditHint.NoHint)
+        self.split_row(row, raw[:pos], raw[pos:])
 
     def update_timing(self, row: int):
         if not (0 <= row < len(self.captions)):
@@ -2887,12 +2951,12 @@ class MainWindow(QMainWindow):
                 return True
         if (
             event.type() == QEvent.Type.KeyPress
-            and event.key() == Qt.Key.Key_S
+            and event.key() in (Qt.Key.Key_S, Qt.Key.Key_X)
             and not event.modifiers()
         ):
             focus = QApplication.focusWidget()
             if not isinstance(focus, (QLineEdit, QPlainTextEdit)) and not self.subtitle_overlay.editing:
-                self.split_at_playhead()
+                self.split_at_playhead(smart=event.key() == Qt.Key.Key_S)
                 return True
         if (
             event.type() == QEvent.Type.KeyPress
@@ -3107,9 +3171,9 @@ class MainWindow(QMainWindow):
         editor.push_undo()
         self.waveform.waveform.set_editing_index(editor.table.currentRow())
 
-    def split_at_playhead(self):
+    def split_at_playhead(self, smart: bool = True):
         seconds = self.player.position() / 1000
-        if self.active_editor().split_at_time(seconds):
+        if self.active_editor().split_at_time(seconds, smart):
             self.status.setText("Trecho dividido no cursor de reprodução")
         else:
             self.status.setText("Nenhum trecho sob o cursor de reprodução")

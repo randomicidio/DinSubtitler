@@ -76,6 +76,7 @@ executar ou modificar o código-fonte.
 - `F4`: juntar dois trechos consecutivos selecionados
 - `F5`: separar um trecho na posição do cursor
 - `S`: separar o trecho sob o cursor de reprodução, dividindo o texto de forma inteligente pela pontuação mais próxima do meio
+- `X`: separar o trecho sob o cursor de reprodução mantendo o texto completo nas duas metades
 - `Delete`: excluir os trechos selecionados
 - `Shift + Enter`: inserir uma quebra de linha manual
 - Rodinha do mouse sobre a waveform: aplicar zoom
@@ -87,9 +88,11 @@ Na waveform:
 - Clique ou arraste com o botão esquerdo numa área vazia para navegar pelo vídeo.
 - Arraste com o botão direito sobre uma área vazia para selecionar vários blocos.
 - Segure `Ctrl` e arraste em uma área vazia para desenhar um novo bloco.
+- Segure `Ctrl` e clique em blocos para adicioná-los ou removê-los da seleção.
 - Selecione um ou mais blocos, segure `Alt` e arraste para criar uma cópia.
 - Dê duplo clique num bloco para editar seu texto na lista.
 - Arraste um bloco para mover o trecho inteiro.
+- Com vários blocos selecionados, arraste qualquer um deles para mover o grupo inteiro.
 - Arraste as bordas para ajustar o início ou o fim.
 - Arraste a divisão entre blocos adjacentes para alterar os dois tempos simultaneamente.
 
