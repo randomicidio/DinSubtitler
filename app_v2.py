@@ -3141,9 +3141,15 @@ class MainWindow(QMainWindow):
                 self.toggle_play()
                 return True
         if event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Delete:
-            editor = self.active_editor()
-            if QApplication.focusWidget() is editor.table:
-                editor.delete_selected()
+            focus = QApplication.focusWidget()
+            # Apaga os trechos selecionados de onde quer que o atalho venha
+            # (waveform, tabela, player) — menos quando um texto está sendo
+            # digitado, onde Delete apaga caracteres.
+            if (
+                not isinstance(focus, (QLineEdit, QPlainTextEdit, QSpinBox))
+                and not self.subtitle_overlay.editing
+            ):
+                self.active_editor().delete_selected()
                 return True
         if (
             event.type() == QEvent.Type.KeyPress
