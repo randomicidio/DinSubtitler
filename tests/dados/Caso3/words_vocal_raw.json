@@ -1,0 +1,611 @@
+{
+ "words": [
+  {
+   "word": " You're",
+   "start": 0.0,
+   "end": 1.26,
+   "isolated_start": false
+  },
+  {
+   "word": " saying",
+   "start": 1.26,
+   "end": 1.58,
+   "isolated_start": false
+  },
+  {
+   "word": " bad,",
+   "start": 1.58,
+   "end": 2.02,
+   "isolated_start": false
+  },
+  {
+   "word": " but",
+   "start": 2.18,
+   "end": 2.52,
+   "isolated_start": false
+  },
+  {
+   "word": " I",
+   "start": 2.52,
+   "end": 2.7,
+   "isolated_start": false
+  },
+  {
+   "word": " feel",
+   "start": 2.7,
+   "end": 3.08,
+   "isolated_start": false
+  },
+  {
+   "word": " just",
+   "start": 3.08,
+   "end": 3.42,
+   "isolated_start": false
+  },
+  {
+   "word": " a",
+   "start": 3.42,
+   "end": 3.62,
+   "isolated_start": false
+  },
+  {
+   "word": " little",
+   "start": 3.62,
+   "end": 4.02,
+   "isolated_start": false
+  },
+  {
+   "word": " bit",
+   "start": 4.02,
+   "end": 4.28,
+   "isolated_start": false
+  },
+  {
+   "word": " bigger",
+   "start": 4.28,
+   "end": 4.7,
+   "isolated_start": false
+  },
+  {
+   "word": " now",
+   "start": 4.7,
+   "end": 5.58,
+   "isolated_start": false
+  },
+  {
+   "word": " Our",
+   "start": 7.760000000000001,
+   "end": 8.52,
+   "isolated_start": true
+  },
+  {
+   "word": " song",
+   "start": 8.52,
+   "end": 9.2,
+   "isolated_start": false
+  },
+  {
+   "word": " on",
+   "start": 9.2,
+   "end": 9.66,
+   "isolated_start": false
+  },
+  {
+   "word": " the",
+   "start": 9.66,
+   "end": 9.86,
+   "isolated_start": false
+  },
+  {
+   "word": " radio,",
+   "start": 9.86,
+   "end": 10.3,
+   "isolated_start": false
+  },
+  {
+   "word": " but",
+   "start": 10.5,
+   "end": 10.72,
+   "isolated_start": false
+  },
+  {
+   "word": " it",
+   "start": 10.72,
+   "end": 10.94,
+   "isolated_start": false
+  },
+  {
+   "word": " doesn't",
+   "start": 10.94,
+   "end": 11.44,
+   "isolated_start": false
+  },
+  {
+   "word": " sound",
+   "start": 11.44,
+   "end": 11.74,
+   "isolated_start": false
+  },
+  {
+   "word": " the",
+   "start": 11.74,
+   "end": 12.12,
+   "isolated_start": false
+  },
+  {
+   "word": " same",
+   "start": 12.12,
+   "end": 12.66,
+   "isolated_start": false
+  },
+  {
+   "word": " When",
+   "start": 14.98,
+   "end": 15.74,
+   "isolated_start": true
+  },
+  {
+   "word": " our",
+   "start": 15.74,
+   "end": 16.02,
+   "isolated_start": false
+  },
+  {
+   "word": " friends",
+   "start": 16.02,
+   "end": 16.62,
+   "isolated_start": false
+  },
+  {
+   "word": " talk",
+   "start": 16.62,
+   "end": 16.98,
+   "isolated_start": false
+  },
+  {
+   "word": " about",
+   "start": 16.98,
+   "end": 17.5,
+   "isolated_start": false
+  },
+  {
+   "word": " you,",
+   "start": 17.5,
+   "end": 17.84,
+   "isolated_start": false
+  },
+  {
+   "word": " it",
+   "start": 17.88,
+   "end": 18.1,
+   "isolated_start": false
+  },
+  {
+   "word": " totally",
+   "start": 18.1,
+   "end": 18.64,
+   "isolated_start": false
+  },
+  {
+   "word": " tears",
+   "start": 18.64,
+   "end": 19.06,
+   "isolated_start": false
+  },
+  {
+   "word": " me",
+   "start": 19.06,
+   "end": 19.52,
+   "isolated_start": false
+  },
+  {
+   "word": " down",
+   "start": 19.52,
+   "end": 20.0,
+   "isolated_start": false
+  },
+  {
+   "word": " Cause",
+   "start": 22.380000000000003,
+   "end": 23.14,
+   "isolated_start": true
+  },
+  {
+   "word": " my",
+   "start": 23.14,
+   "end": 23.46,
+   "isolated_start": false
+  },
+  {
+   "word": " heart",
+   "start": 23.46,
+   "end": 23.98,
+   "isolated_start": false
+  },
+  {
+   "word": " breaks",
+   "start": 23.98,
+   "end": 24.42,
+   "isolated_start": false
+  },
+  {
+   "word": " a",
+   "start": 24.42,
+   "end": 24.74,
+   "isolated_start": false
+  },
+  {
+   "word": " little",
+   "start": 24.74,
+   "end": 25.02,
+   "isolated_start": false
+  },
+  {
+   "word": " when",
+   "start": 25.02,
+   "end": 26.14,
+   "isolated_start": false
+  },
+  {
+   "word": " I",
+   "start": 26.14,
+   "end": 26.42,
+   "isolated_start": false
+  },
+  {
+   "word": " hear",
+   "start": 26.42,
+   "end": 26.8,
+   "isolated_start": false
+  },
+  {
+   "word": " your",
+   "start": 26.8,
+   "end": 27.1,
+   "isolated_start": false
+  },
+  {
+   "word": " name",
+   "start": 27.1,
+   "end": 27.6,
+   "isolated_start": false
+  },
+  {
+   "word": " And",
+   "start": 27.6,
+   "end": 28.54,
+   "isolated_start": false
+  },
+  {
+   "word": " all",
+   "start": 28.54,
+   "end": 28.84,
+   "isolated_start": false
+  },
+  {
+   "word": " just",
+   "start": 28.84,
+   "end": 29.26,
+   "isolated_start": false
+  },
+  {
+   "word": " sounds",
+   "start": 29.26,
+   "end": 29.86,
+   "isolated_start": false
+  },
+  {
+   "word": " like",
+   "start": 29.86,
+   "end": 30.44,
+   "isolated_start": false
+  },
+  {
+   "word": " I'm",
+   "start": 36.92,
+   "end": 37.8,
+   "isolated_start": true
+  },
+  {
+   "word": " too",
+   "start": 37.8,
+   "end": 38.52,
+   "isolated_start": false
+  },
+  {
+   "word": " young,",
+   "start": 38.52,
+   "end": 39.16,
+   "isolated_start": false
+  },
+  {
+   "word": " too",
+   "start": 39.2,
+   "end": 39.5,
+   "isolated_start": false
+  },
+  {
+   "word": " dumb",
+   "start": 39.5,
+   "end": 39.94,
+   "isolated_start": false
+  },
+  {
+   "word": " to",
+   "start": 39.94,
+   "end": 40.16,
+   "isolated_start": false
+  },
+  {
+   "word": " realize",
+   "start": 40.16,
+   "end": 41.18,
+   "isolated_start": false
+  },
+  {
+   "word": " That",
+   "start": 42.18000000000001,
+   "end": 43.06,
+   "isolated_start": true
+  },
+  {
+   "word": " I",
+   "start": 43.06,
+   "end": 43.44,
+   "isolated_start": false
+  },
+  {
+   "word": " should",
+   "start": 43.44,
+   "end": 44.06,
+   "isolated_start": false
+  },
+  {
+   "word": " have",
+   "start": 44.06,
+   "end": 44.34,
+   "isolated_start": false
+  },
+  {
+   "word": " bought",
+   "start": 44.34,
+   "end": 44.72,
+   "isolated_start": false
+  },
+  {
+   "word": " you",
+   "start": 44.72,
+   "end": 45.02,
+   "isolated_start": false
+  },
+  {
+   "word": " flowers",
+   "start": 45.02,
+   "end": 46.12,
+   "isolated_start": false
+  },
+  {
+   "word": " And",
+   "start": 47.120000000000005,
+   "end": 48.0,
+   "isolated_start": true
+  },
+  {
+   "word": " held",
+   "start": 48.0,
+   "end": 48.32,
+   "isolated_start": false
+  },
+  {
+   "word": " you",
+   "start": 48.32,
+   "end": 48.68,
+   "isolated_start": false
+  },
+  {
+   "word": " here",
+   "start": 48.68,
+   "end": 49.18,
+   "isolated_start": false
+  },
+  {
+   "word": " Should",
+   "start": 49.72,
+   "end": 50.52,
+   "isolated_start": true
+  },
+  {
+   "word": " have",
+   "start": 50.52,
+   "end": 50.9,
+   "isolated_start": false
+  },
+  {
+   "word": " given",
+   "start": 50.9,
+   "end": 51.2,
+   "isolated_start": false
+  },
+  {
+   "word": " up",
+   "start": 51.2,
+   "end": 51.46,
+   "isolated_start": false
+  },
+  {
+   "word": " my",
+   "start": 51.46,
+   "end": 52.18,
+   "isolated_start": false
+  },
+  {
+   "word": " arms",
+   "start": 52.18,
+   "end": 53.08,
+   "isolated_start": false
+  },
+  {
+   "word": " And",
+   "start": 54.040000000000006,
+   "end": 54.54,
+   "isolated_start": true
+  },
+  {
+   "word": " I",
+   "start": 54.54,
+   "end": 54.92,
+   "isolated_start": false
+  },
+  {
+   "word": " had",
+   "start": 54.92,
+   "end": 55.22,
+   "isolated_start": false
+  },
+  {
+   "word": " a",
+   "start": 55.22,
+   "end": 55.82,
+   "isolated_start": false
+  },
+  {
+   "word": " chance",
+   "start": 55.82,
+   "end": 56.14,
+   "isolated_start": false
+  },
+  {
+   "word": " Take",
+   "start": 56.14,
+   "end": 58.02,
+   "isolated_start": false
+  },
+  {
+   "word": " it",
+   "start": 58.02,
+   "end": 58.38,
+   "isolated_start": false
+  },
+  {
+   "word": " to",
+   "start": 58.38,
+   "end": 58.58,
+   "isolated_start": false
+  },
+  {
+   "word": " everybody,",
+   "start": 58.58,
+   "end": 59.46,
+   "isolated_start": false
+  },
+  {
+   "word": " cause",
+   "start": 59.46,
+   "end": 60.36,
+   "isolated_start": false
+  },
+  {
+   "word": " all",
+   "start": 60.36,
+   "end": 60.74,
+   "isolated_start": false
+  },
+  {
+   "word": " you",
+   "start": 60.74,
+   "end": 61.34,
+   "isolated_start": false
+  },
+  {
+   "word": " wanted",
+   "start": 61.34,
+   "end": 61.98,
+   "isolated_start": false
+  },
+  {
+   "word": " to",
+   "start": 61.98,
+   "end": 62.14,
+   "isolated_start": false
+  },
+  {
+   "word": " do",
+   "start": 62.14,
+   "end": 62.52,
+   "isolated_start": false
+  },
+  {
+   "word": " was",
+   "start": 62.52,
+   "end": 62.86,
+   "isolated_start": false
+  },
+  {
+   "word": " dance",
+   "start": 62.86,
+   "end": 63.68,
+   "isolated_start": false
+  },
+  {
+   "word": " Now",
+   "start": 64.88,
+   "end": 65.38,
+   "isolated_start": true
+  },
+  {
+   "word": " my",
+   "start": 65.38,
+   "end": 65.76,
+   "isolated_start": false
+  },
+  {
+   "word": " baby's",
+   "start": 65.76,
+   "end": 66.74,
+   "isolated_start": false
+  },
+  {
+   "word": " dancing,",
+   "start": 66.74,
+   "end": 67.42,
+   "isolated_start": false
+  },
+  {
+   "word": " while",
+   "start": 67.76,
+   "end": 68.68,
+   "isolated_start": false
+  },
+  {
+   "word": " she's",
+   "start": 68.68,
+   "end": 69.14,
+   "isolated_start": false
+  },
+  {
+   "word": " dancing",
+   "start": 69.14,
+   "end": 69.66,
+   "isolated_start": false
+  },
+  {
+   "word": " with",
+   "start": 69.66,
+   "end": 70.06,
+   "isolated_start": false
+  },
+  {
+   "word": " another",
+   "start": 70.06,
+   "end": 70.48,
+   "isolated_start": false
+  },
+  {
+   "word": " man",
+   "start": 70.48,
+   "end": 70.98,
+   "isolated_start": false
+  }
+ ],
+ "total": 74.88
+}

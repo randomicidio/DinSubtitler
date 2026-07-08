@@ -377,7 +377,7 @@ def match_lyric_tokens(line_tokens: list, heard: list[str]) -> list[tuple[int, i
     return matches
 
 
-def align_lyrics_to_words(lines: list[str], words: list[dict]) -> list[dict]:
+def align_lyrics_to_words(lines: list[str], words: list[dict], env=None) -> list[dict]:
     line_tokens = []
     token_counts = [0] * len(lines)
     for index, line in enumerate(lines):
@@ -388,7 +388,8 @@ def align_lyrics_to_words(lines: list[str], words: list[dict]) -> list[dict]:
     kept = [(normalize_token(w["word"]), i) for i, w in enumerate(words)]
     kept = [(token, i) for token, i in kept if token]
     heard = [token for token, _ in kept]
-    spans: list[list[float] | None] = [None] * len(lines)
+    runs = envelope_runs(env)
+    matched: list[list] = [[] for _ in lines]
     matched_weights = [0.0] * len(lines)
     for a, b, sim in match_lyric_tokens(line_tokens, heard):
         _, line_index = line_tokens[a]
@@ -404,20 +405,67 @@ def align_lyrics_to_words(lines: list[str], words: list[dict]) -> list[dict]:
         # demais numa única palavra; sem o teto, ela invade o verso
         # seguinte em vez de só esticar o próprio verso.
         end = min(raw_end, raw_start + WORD_MAX_HOLD_SECONDS)
-        span = spans[line_index]
-        if span is None:
-            spans[line_index] = [start, end]
-        else:
-            span[0] = min(span[0], start)
-            span[1] = max(span[1], end)
-    # Uma palavra solta parecida não prova que o verso foi cantado ali: só
-    # vale como âncora o verso com peso somado de boa parte das palavras.
-    for index, span in enumerate(spans):
-        if span is None:
+        # A subida de voz no envelope diz onde a palavra realmente começa,
+        # descontando o silêncio e a nota segurada que o Whisper abraçou.
+        onset = envelope_word_start(word, runs)
+        if onset is not None:
+            start = max(start, onset)
+            end = max(end, start + 0.1)
+        matched[line_index].append([start, end, sim])
+    spans: list[list[float] | None] = [None] * len(lines)
+    for index, entries in enumerate(matched):
+        if not entries:
             continue
+        # Uma palavra solta parecida não prova que o verso foi cantado ali:
+        # só vale como âncora o verso com peso somado de boa parte das
+        # palavras.
         required = max(0.9, token_counts[index] * 0.35)
         if matched_weights[index] < required:
-            spans[index] = None
+            continue
+        entries.sort(key=lambda e: e[0])
+        # Palavra ouvida bem antes do resto do próprio verso costuma ser um
+        # eco da nota segurada anterior ("miiind" ouvido como "cause"); o
+        # grupo inicial isolado e mais leve que o restante é descartado,
+        # mas apenas quando um silêncio real (trechos de voz distintos no
+        # envelope) separa o grupo do resto — dentro do mesmo fôlego é só
+        # um verso cantado devagar.
+        def run_of(moment: float):
+            return next(
+                (k for k, (r0, r1) in enumerate(runs) if r0 <= moment < r1), None
+            )
+
+        previous_span = next(
+            (spans[j] for j in range(index - 1, -1, -1) if spans[j]), None
+        )
+        while runs and len(entries) >= 2:
+            cut = next(
+                (k + 1 for k in range(len(entries) - 1)
+                 if entries[k + 1][0] - entries[k][1] > 1.2),
+                None,
+            )
+            if cut is None:
+                break
+            if entries[cut][0] - entries[0][0] > 8.0:
+                break
+            lead_run = run_of(entries[cut - 1][0])
+            if lead_run is not None and lead_run == run_of(entries[cut][0]):
+                break
+            lead = sum(e[2] for e in entries[:cut])
+            rest = sum(e[2] for e in entries[cut:])
+            # Grupo inicial no mesmo fôlego em que o verso anterior terminou
+            # é a nota segurada dele ("wiiild" ouvido como "born"), mesmo
+            # quando pesa mais que o resto.
+            held_by_previous = (
+                previous_span is not None
+                and lead_run is not None
+                and run_of(max(previous_span[1] - 0.05, 0.0)) == lead_run
+            )
+            if lead >= rest and not held_by_previous:
+                break
+            del entries[:cut]
+        spans[index] = [
+            min(e[0] for e in entries), max(e[1] for e in entries),
+        ]
     return spans
 
 
@@ -439,6 +487,73 @@ def envelope_thresholds(env):
     if peak <= quiet + 1e-4:
         return None
     return quiet, quiet + (peak - quiet) * 0.3
+
+
+def envelope_runs(env) -> list[tuple[float, float]]:
+    """Trechos (início, fim) com voz ativa, tolerando respiros de até 0,25s."""
+    if env is None or not len(env):
+        return []
+    thresholds = envelope_thresholds(env)
+    if not thresholds:
+        return []
+    _, loud = thresholds
+    hop = LYRIC_ENVELOPE_HOP
+    runs = []
+    start = None
+    silent = 0
+    for k in range(len(env)):
+        if env[k] >= loud:
+            if start is None:
+                start = k
+            silent = 0
+        elif start is not None:
+            silent += 1
+            if silent > 25:
+                runs.append(((start * hop), (k - silent + 1) * hop))
+                start = None
+    if start is not None:
+        runs.append((start * hop, len(env) * hop))
+    return runs
+
+
+def envelope_word_start(word: dict, runs: list) -> float | None:
+    """Início real da palavra segundo a presença de voz no áudio.
+
+    O Whisper estica palavras por cima de silêncio e de notas seguradas do
+    verso anterior; a subida de energia da voz marca onde o canto realmente
+    começa. Uma palavra ouvida quase toda em silêncio (alucinada num eco ou
+    respiro) tem seu início empurrado para a próxima subida de voz.
+    """
+    if not runs:
+        return None
+    ws, we = word["start"], word["end"]
+    duration = max(we - ws, 1e-6)
+    best_overlap, best_onset, covered = 0.0, None, 0.0
+    start_overlap, start_onset = 0.0, None
+    for r0, r1 in runs:
+        overlap = min(we, r1) - max(ws, r0)
+        if overlap <= 0:
+            continue
+        covered += overlap
+        if overlap > best_overlap:
+            best_overlap, best_onset = overlap, r0
+        if r0 <= ws < r1:
+            start_overlap, start_onset = overlap, r0
+    if covered < duration * 0.25 or best_onset is None:
+        onset = next((r0 for r0, _ in runs if r0 >= ws), None)
+        if onset is not None and onset - ws <= 6.0:
+            return onset
+        return None
+    if start_onset is None:
+        # A palavra começa em silêncio: a voz dela só entra na subida.
+        return max(ws, best_onset)
+    if best_onset != start_onset and best_overlap >= start_overlap * 2:
+        # O comecinho está num trecho de voz alheio (a cauda do verso
+        # anterior), mas o corpo da palavra vive claramente em outro:
+        # o início real é a subida do trecho dominante. Sem dominância
+        # clara, é só um respiro no meio da palavra — o início vale.
+        return best_onset
+    return ws
 
 
 def voiced_window(env, begin: float, finish: float):
@@ -466,12 +581,36 @@ def voiced_window(env, begin: float, finish: float):
     return v0, v1
 
 
-def captions_from_lyrics(lines: list[str], spans: list, total: float, env=None) -> list[dict]:
+def captions_from_lyrics(
+    lines: list[str], spans: list, total: float, env=None, words: list[dict] | None = None
+) -> list[dict]:
     if not any(spans):
         raise RuntimeError(
             "Não consegui reconhecer a letra dessa música no áudio.\n"
             "Confira se a letra corresponde ao que é cantado no vídeo."
         )
+
+    def rescue_supported(indexes, begin: float, finish: float) -> bool:
+        """Só há versos novos na janela se as palavras ouvidas ali realmente
+        soam como o texto deles — energia sozinha é nota segurada/vocalize."""
+        if not words:
+            return False
+        window_words = [
+            w for w in words if begin <= (w["start"] + w["end"]) / 2 <= finish
+        ]
+        if len(window_words) < 2:
+            return False
+        candidate_tokens = []
+        for i in indexes:
+            for token in (normalize_token(t) for t in lines[i].split()):
+                if token:
+                    candidate_tokens.append((token, i))
+        heard = [normalize_token(w["word"]) for w in window_words]
+        heard = [t for t in heard if t]
+        weight = sum(
+            sim for _, _, sim in match_lyric_tokens(candidate_tokens, heard)
+        )
+        return weight >= max(1.8, len(candidate_tokens) * 0.35)
     # O vídeo pode mostrar só um trecho da música: versos antes do primeiro
     # ponto reconhecido e depois do último são descartados, não inventados.
     anchors = [i for i, span in enumerate(spans) if span]
@@ -496,6 +635,16 @@ def captions_from_lyrics(lines: list[str], spans: list, total: float, env=None) 
         # Mesmo sem reconhecer as palavras, a presença de voz no intervalo
         # diz onde os versos que faltam foram cantados.
         window = voiced_window(env, begin, finish)
+        # A nota final do verso anterior pode continuar soando um pouco
+        # dentro do intervalo; se depois dela existe voz separada por
+        # silêncio, os versos que faltam pertencem a essa voz. Um trecho
+        # longo de voz, porém, é canto de verdade (o verso que falta), não
+        # uma nota segurada — nesse caso nada é pulado.
+        hold_end = voiced_run_end(env, begin, finish)
+        if begin + 0.2 < hold_end <= begin + 1.5:
+            later = voiced_window(env, hold_end + 0.05, finish)
+            if later:
+                window = later
         if window:
             distribute(range(prev + 1, nxt), *window)
             continue
@@ -521,19 +670,25 @@ def captions_from_lyrics(lines: list[str], spans: list, total: float, env=None) 
 
     # Versos antes da primeira âncora (e depois da última) normalmente não
     # estão no vídeo — mas se ali existe voz cantada, eles são resgatados,
-    # tantos quantos couberem no trecho com voz.
+    # tantos quantos couberem no trecho com voz. Voz no envelope sem nenhuma
+    # palavra ouvida é a nota final segurada (ou vocalize) do verso vizinho,
+    # não versos novos — nesse caso nada é resgatado.
     first = anchors[0]
     if first > 0:
         window = voiced_window(env, max(0.0, filled[first][0] - 20.0), filled[first][0] - 0.05)
         if window:
             count = min(first, max(1, int((window[1] - window[0]) / 1.5)))
-            distribute(range(first - count, first), *window)
+            indexes = range(first - count, first)
+            if rescue_supported(indexes, *window):
+                distribute(indexes, *window)
     last = anchors[-1]
     if last < len(lines) - 1:
         window = voiced_window(env, filled[last][1] + 0.05, min(total, filled[last][1] + 20.0))
         if window:
             count = min(len(lines) - 1 - last, max(1, int((window[1] - window[0]) / 1.5)))
-            distribute(range(last + 1, last + 1 + count), *window)
+            indexes = range(last + 1, last + 1 + count)
+            if rescue_supported(indexes, *window):
+                distribute(indexes, *window)
     captions = []
     for index in sorted(filled):
         start, end = filled[index]
@@ -789,21 +944,59 @@ def voiced_run_end(env, begin: float, limit: float) -> float:
     return max(begin, last_voiced * hop)
 
 
+def held_voice_end(env, begin: float, limit: float) -> float:
+    """Até onde a voz segue soando a partir de `begin`, atravessando
+    respiros e também vocalizes soltos ("ooh-ooh") que nenhum verso
+    reivindicou, sem nunca passar de `limit`."""
+    held = voiced_run_end(env, begin, limit)
+    for r0, r1 in envelope_runs(env):
+        if r1 <= held:
+            continue
+        # Um trecho que invade o espaço do próximo verso é a voz dele, não
+        # um vocalize solto — a extensão para antes.
+        if r0 >= limit or r1 > limit + 0.3:
+            break
+        if r0 - held > 2.5:
+            break
+        held = min(r1, limit)
+    # A nota final desvanece: abaixo do nível de "som ativo", mas ainda
+    # soando. A cauda segue enquanto a energia fica acima de um limiar
+    # de release mais baixo.
+    thresholds = envelope_thresholds(env)
+    if thresholds:
+        quiet, loud = thresholds
+        release = quiet + (loud - quiet) * 0.4
+        hop = LYRIC_ENVELOPE_HOP
+        k = int(held / hop)
+        stop = min(int(limit / hop), len(env))
+        while k < stop and env[k] >= release:
+            k += 1
+        held = max(held, k * hop)
+    return max(begin, held)
+
+
 def extend_lyric_ends(captions: list[dict], total: float, env=None) -> list[dict]:
-    # Notas sustentadas duram mais do que o Whisper marca: cada verso
-    # permanece na tela até o próximo começar (estilo karaokê) e, em
-    # pausas maiores, segue o envelope enquanto a voz continuar soando.
+    # Notas sustentadas duram mais do que o Whisper marca: cada verso segue
+    # o envelope enquanto a voz continuar soando, mais um respiro curto de
+    # leitura. Ele só é emendado no próximo verso quando o canto é de fato
+    # contínuo — pausas reais do cantor viram intervalo entre as legendas.
     for current, following in zip(captions, captions[1:]):
         gap = following["start"] - current["end"]
-        if 0 < gap <= 2.0:
-            current["end"] = following["start"]
-        elif gap > 2.0:
-            held = voiced_run_end(env, current["end"], following["start"] - 0.2)
-            current["end"] = round(max(current["end"] + 0.8, held), 3)
+        if gap <= 0:
+            continue
+        if env is None or not len(env):
+            if gap <= 2.0:
+                current["end"] = following["start"]
+            continue
+        held = held_voice_end(env, current["end"], following["start"] - 0.15)
+        end = max(current["end"], held) + 0.45
+        if following["start"] - end < 0.3:
+            end = following["start"]
+        current["end"] = round(min(end, following["start"]), 3)
     if captions:
         last = captions[-1]
-        held = voiced_run_end(env, last["end"], max(total, last["end"]))
-        last["end"] = round(min(max(last["end"] + 1.2, held), max(total, last["end"])), 3)
+        held = held_voice_end(env, last["end"], max(total, last["end"])) if env is not None and len(env) else last["end"]
+        last["end"] = round(min(max(last["end"] + 1.2, held + 0.45), max(total, last["end"])), 3)
     return captions
 
 
@@ -1009,11 +1202,14 @@ class Engine:
         self.emit("Sincronizando os versos…", 95)
         # As três escutas erram versos diferentes; o merge preenche as
         # lacunas de uma com as âncoras das outras, respeitando a ordem.
-        spans = align_lyrics_to_words(lines, vocal_words)
+        spans = align_lyrics_to_words(lines, vocal_words, env)
         for support in (vocal_raw_words, mix_words):
             if support:
-                spans = merge_spans(spans, align_lyrics_to_words(lines, support))
-        captions = captions_from_lyrics(lines, spans, total, env)
+                spans = merge_spans(spans, align_lyrics_to_words(lines, support, env))
+        all_words = sorted(
+            vocal_words + vocal_raw_words + mix_words, key=lambda w: w["start"]
+        )
+        captions = captions_from_lyrics(lines, spans, total, env, words=all_words)
         captions = refine_lyric_starts(captions, env)
         captions = extend_lyric_ends(captions, total, env)
         self.emit(f"{len(captions)} versos sincronizados.", 100)

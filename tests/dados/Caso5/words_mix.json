@@ -1,0 +1,335 @@
+{
+ "words": [
+  {
+   "word": " Like",
+   "start": 2.4799999999999973,
+   "end": 3.36,
+   "isolated_start": true
+  },
+  {
+   "word": " a",
+   "start": 3.36,
+   "end": 3.46,
+   "isolated_start": false
+  },
+  {
+   "word": " smoldering",
+   "start": 3.46,
+   "end": 4.02,
+   "isolated_start": false
+  },
+  {
+   "word": " lightning",
+   "start": 4.02,
+   "end": 4.6,
+   "isolated_start": false
+  },
+  {
+   "word": " Heavy",
+   "start": 5.799999999999997,
+   "end": 6.68,
+   "isolated_start": true
+  },
+  {
+   "word": " metal",
+   "start": 6.68,
+   "end": 7.12,
+   "isolated_start": false
+  },
+  {
+   "word": " thunder",
+   "start": 7.12,
+   "end": 7.8,
+   "isolated_start": false
+  },
+  {
+   "word": " Racing",
+   "start": 9.119999999999997,
+   "end": 10.0,
+   "isolated_start": true
+  },
+  {
+   "word": " with",
+   "start": 10.0,
+   "end": 10.4,
+   "isolated_start": false
+  },
+  {
+   "word": " the",
+   "start": 10.4,
+   "end": 10.6,
+   "isolated_start": false
+  },
+  {
+   "word": " wind",
+   "start": 10.6,
+   "end": 10.94,
+   "isolated_start": false
+  },
+  {
+   "word": " And",
+   "start": 11.879999999999997,
+   "end": 12.76,
+   "isolated_start": true
+  },
+  {
+   "word": " the",
+   "start": 12.76,
+   "end": 12.96,
+   "isolated_start": false
+  },
+  {
+   "word": " feeling",
+   "start": 12.96,
+   "end": 13.36,
+   "isolated_start": false
+  },
+  {
+   "word": " that",
+   "start": 13.36,
+   "end": 13.68,
+   "isolated_start": false
+  },
+  {
+   "word": " I'm",
+   "start": 13.68,
+   "end": 14.36,
+   "isolated_start": false
+  },
+  {
+   "word": " under",
+   "start": 14.36,
+   "end": 14.98,
+   "isolated_start": false
+  },
+  {
+   "word": " It's",
+   "start": 16.299999999999997,
+   "end": 17.18,
+   "isolated_start": true
+  },
+  {
+   "word": " only",
+   "start": 17.18,
+   "end": 17.52,
+   "isolated_start": false
+  },
+  {
+   "word": " gonna",
+   "start": 17.52,
+   "end": 17.82,
+   "isolated_start": false
+  },
+  {
+   "word": " make",
+   "start": 17.82,
+   "end": 18.28,
+   "isolated_start": false
+  },
+  {
+   "word": " it",
+   "start": 18.28,
+   "end": 18.6,
+   "isolated_start": false
+  },
+  {
+   "word": " happen",
+   "start": 18.6,
+   "end": 19.18,
+   "isolated_start": false
+  },
+  {
+   "word": " Tell",
+   "start": 19.84,
+   "end": 20.28,
+   "isolated_start": true
+  },
+  {
+   "word": " the",
+   "start": 20.28,
+   "end": 20.44,
+   "isolated_start": false
+  },
+  {
+   "word": " world",
+   "start": 20.44,
+   "end": 20.78,
+   "isolated_start": false
+  },
+  {
+   "word": " in",
+   "start": 20.78,
+   "end": 21.14,
+   "isolated_start": false
+  },
+  {
+   "word": " a",
+   "start": 21.14,
+   "end": 21.26,
+   "isolated_start": false
+  },
+  {
+   "word": " luminary",
+   "start": 21.26,
+   "end": 21.82,
+   "isolated_start": false
+  },
+  {
+   "word": " breeze",
+   "start": 21.82,
+   "end": 22.76,
+   "isolated_start": false
+  },
+  {
+   "word": " Fire",
+   "start": 22.76,
+   "end": 23.58,
+   "isolated_start": false
+  },
+  {
+   "word": " all",
+   "start": 23.58,
+   "end": 24.02,
+   "isolated_start": false
+  },
+  {
+   "word": " your",
+   "start": 24.02,
+   "end": 24.38,
+   "isolated_start": false
+  },
+  {
+   "word": " kinds",
+   "start": 24.38,
+   "end": 24.86,
+   "isolated_start": false
+  },
+  {
+   "word": " at",
+   "start": 24.86,
+   "end": 25.08,
+   "isolated_start": false
+  },
+  {
+   "word": " once",
+   "start": 25.08,
+   "end": 25.56,
+   "isolated_start": false
+  },
+  {
+   "word": " Splitting",
+   "start": 25.56,
+   "end": 27.0,
+   "isolated_start": false
+  },
+  {
+   "word": " into",
+   "start": 27.0,
+   "end": 27.4,
+   "isolated_start": false
+  },
+  {
+   "word": " space",
+   "start": 27.4,
+   "end": 27.76,
+   "isolated_start": false
+  },
+  {
+   "word": " We",
+   "start": 27.76,
+   "end": 29.08,
+   "isolated_start": false
+  },
+  {
+   "word": " were",
+   "start": 29.08,
+   "end": 32.64,
+   "isolated_start": false
+  },
+  {
+   "word": " born,",
+   "start": 32.64,
+   "end": 33.1,
+   "isolated_start": false
+  },
+  {
+   "word": " born",
+   "start": 33.28,
+   "end": 33.72,
+   "isolated_start": false
+  },
+  {
+   "word": " to",
+   "start": 33.72,
+   "end": 34.0,
+   "isolated_start": false
+  },
+  {
+   "word": " be",
+   "start": 34.0,
+   "end": 34.2,
+   "isolated_start": false
+  },
+  {
+   "word": " wild",
+   "start": 34.2,
+   "end": 34.68,
+   "isolated_start": false
+  },
+  {
+   "word": " We",
+   "start": 34.68,
+   "end": 35.58,
+   "isolated_start": false
+  },
+  {
+   "word": " could",
+   "start": 35.58,
+   "end": 35.94,
+   "isolated_start": false
+  },
+  {
+   "word": " climb",
+   "start": 35.94,
+   "end": 36.36,
+   "isolated_start": false
+  },
+  {
+   "word": " so",
+   "start": 36.36,
+   "end": 36.62,
+   "isolated_start": false
+  },
+  {
+   "word": " high,",
+   "start": 36.62,
+   "end": 37.16,
+   "isolated_start": false
+  },
+  {
+   "word": " I",
+   "start": 37.32,
+   "end": 38.1,
+   "isolated_start": false
+  },
+  {
+   "word": " never",
+   "start": 38.1,
+   "end": 38.52,
+   "isolated_start": false
+  },
+  {
+   "word": " wanna",
+   "start": 38.52,
+   "end": 38.88,
+   "isolated_start": false
+  },
+  {
+   "word": " die",
+   "start": 38.88,
+   "end": 39.4,
+   "isolated_start": false
+  }
+ ],
+ "total": 55.6814375
+}

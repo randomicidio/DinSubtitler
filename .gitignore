@@ -23,3 +23,11 @@ dist/
 
 # Legacy prototype; the active application is app_v2.py.
 app.py
+
+# Casos de estudo locais (vídeos + correções do usuário)
+EstudosDeCasos/
+TestePortable1/
+*.lnk
+
+# Gabaritos do harness de regressão são versionados
+!tests/dados/**/*.srt

@@ -1,0 +1,425 @@
+{
+ "words": [
+  {
+   "word": " My",
+   "start": 0.0,
+   "end": 1.24,
+   "isolated_start": false
+  },
+  {
+   "word": " head's",
+   "start": 1.24,
+   "end": 2.16,
+   "isolated_start": false
+  },
+  {
+   "word": " under",
+   "start": 2.16,
+   "end": 2.66,
+   "isolated_start": false
+  },
+  {
+   "word": " water,",
+   "start": 2.66,
+   "end": 3.8,
+   "isolated_start": false
+  },
+  {
+   "word": " but",
+   "start": 3.8,
+   "end": 4.76,
+   "isolated_start": false
+  },
+  {
+   "word": " I'm",
+   "start": 4.76,
+   "end": 5.92,
+   "isolated_start": false
+  },
+  {
+   "word": " ready",
+   "start": 5.92,
+   "end": 6.26,
+   "isolated_start": false
+  },
+  {
+   "word": " to",
+   "start": 6.26,
+   "end": 6.8,
+   "isolated_start": false
+  },
+  {
+   "word": " fight",
+   "start": 6.8,
+   "end": 7.62,
+   "isolated_start": false
+  },
+  {
+   "word": " You're",
+   "start": 7.62,
+   "end": 9.52,
+   "isolated_start": false
+  },
+  {
+   "word": " crazy,",
+   "start": 9.52,
+   "end": 10.54,
+   "isolated_start": false
+  },
+  {
+   "word": " like",
+   "start": 10.64,
+   "end": 11.3,
+   "isolated_start": false
+  },
+  {
+   "word": " out",
+   "start": 11.3,
+   "end": 12.08,
+   "isolated_start": false
+  },
+  {
+   "word": " of",
+   "start": 12.08,
+   "end": 12.52,
+   "isolated_start": false
+  },
+  {
+   "word": " my",
+   "start": 12.52,
+   "end": 12.74,
+   "isolated_start": false
+  },
+  {
+   "word": " mind",
+   "start": 12.74,
+   "end": 13.86,
+   "isolated_start": false
+  },
+  {
+   "word": " Cause",
+   "start": 15.26,
+   "end": 16.66,
+   "isolated_start": true
+  },
+  {
+   "word": " all",
+   "start": 16.66,
+   "end": 17.2,
+   "isolated_start": false
+  },
+  {
+   "word": " of",
+   "start": 17.2,
+   "end": 17.82,
+   "isolated_start": false
+  },
+  {
+   "word": " me",
+   "start": 17.82,
+   "end": 18.76,
+   "isolated_start": false
+  },
+  {
+   "word": " loves",
+   "start": 18.76,
+   "end": 19.96,
+   "isolated_start": false
+  },
+  {
+   "word": " all",
+   "start": 19.96,
+   "end": 20.92,
+   "isolated_start": false
+  },
+  {
+   "word": " of",
+   "start": 20.92,
+   "end": 22.16,
+   "isolated_start": false
+  },
+  {
+   "word": " you",
+   "start": 22.16,
+   "end": 22.58,
+   "isolated_start": false
+  },
+  {
+   "word": " Loves",
+   "start": 22.58,
+   "end": 23.82,
+   "isolated_start": false
+  },
+  {
+   "word": " you",
+   "start": 23.82,
+   "end": 24.02,
+   "isolated_start": false
+  },
+  {
+   "word": " cause",
+   "start": 24.02,
+   "end": 24.58,
+   "isolated_start": false
+  },
+  {
+   "word": " in",
+   "start": 24.58,
+   "end": 25.26,
+   "isolated_start": false
+  },
+  {
+   "word": " all",
+   "start": 25.26,
+   "end": 25.62,
+   "isolated_start": false
+  },
+  {
+   "word": " your",
+   "start": 25.62,
+   "end": 26.0,
+   "isolated_start": false
+  },
+  {
+   "word": " edges",
+   "start": 26.0,
+   "end": 26.54,
+   "isolated_start": false
+  },
+  {
+   "word": " All",
+   "start": 26.54,
+   "end": 27.42,
+   "isolated_start": false
+  },
+  {
+   "word": " you",
+   "start": 27.42,
+   "end": 27.74,
+   "isolated_start": false
+  },
+  {
+   "word": " perfect",
+   "start": 27.74,
+   "end": 28.64,
+   "isolated_start": false
+  },
+  {
+   "word": " imperfections",
+   "start": 28.64,
+   "end": 30.56,
+   "isolated_start": false
+  },
+  {
+   "word": " Give",
+   "start": 30.56,
+   "end": 31.24,
+   "isolated_start": false
+  },
+  {
+   "word": " you",
+   "start": 31.24,
+   "end": 31.7,
+   "isolated_start": false
+  },
+  {
+   "word": " all",
+   "start": 31.7,
+   "end": 32.26,
+   "isolated_start": false
+  },
+  {
+   "word": " to",
+   "start": 32.26,
+   "end": 33.6,
+   "isolated_start": false
+  },
+  {
+   "word": " me",
+   "start": 33.6,
+   "end": 33.96,
+   "isolated_start": false
+  },
+  {
+   "word": " Give",
+   "start": 34.370000000000005,
+   "end": 34.96,
+   "isolated_start": false
+  },
+  {
+   "word": " my",
+   "start": 34.96,
+   "end": 35.5,
+   "isolated_start": false
+  },
+  {
+   "word": " all",
+   "start": 35.5,
+   "end": 36.12,
+   "isolated_start": false
+  },
+  {
+   "word": " to",
+   "start": 36.12,
+   "end": 37.52,
+   "isolated_start": false
+  },
+  {
+   "word": " you",
+   "start": 37.52,
+   "end": 37.94,
+   "isolated_start": false
+  },
+  {
+   "word": " You're",
+   "start": 38.5,
+   "end": 39.18,
+   "isolated_start": true
+  },
+  {
+   "word": " my",
+   "start": 39.18,
+   "end": 39.44,
+   "isolated_start": false
+  },
+  {
+   "word": " end",
+   "start": 39.44,
+   "end": 40.38,
+   "isolated_start": false
+  },
+  {
+   "word": " and",
+   "start": 40.38,
+   "end": 40.74,
+   "isolated_start": false
+  },
+  {
+   "word": " my",
+   "start": 40.74,
+   "end": 41.16,
+   "isolated_start": false
+  },
+  {
+   "word": " beginning",
+   "start": 41.16,
+   "end": 41.82,
+   "isolated_start": false
+  },
+  {
+   "word": " Even",
+   "start": 41.82,
+   "end": 43.2,
+   "isolated_start": false
+  },
+  {
+   "word": " when",
+   "start": 43.2,
+   "end": 43.96,
+   "isolated_start": false
+  },
+  {
+   "word": " I",
+   "start": 43.96,
+   "end": 44.5,
+   "isolated_start": false
+  },
+  {
+   "word": " lose",
+   "start": 44.5,
+   "end": 45.08,
+   "isolated_start": false
+  },
+  {
+   "word": " everything",
+   "start": 45.08,
+   "end": 45.68,
+   "isolated_start": false
+  },
+  {
+   "word": " Cause",
+   "start": 46.19,
+   "end": 46.78,
+   "isolated_start": true
+  },
+  {
+   "word": " I",
+   "start": 46.78,
+   "end": 46.96,
+   "isolated_start": false
+  },
+  {
+   "word": " give",
+   "start": 46.96,
+   "end": 47.24,
+   "isolated_start": false
+  },
+  {
+   "word": " you",
+   "start": 47.24,
+   "end": 47.54,
+   "isolated_start": false
+  },
+  {
+   "word": " all",
+   "start": 47.54,
+   "end": 48.02,
+   "isolated_start": false
+  },
+  {
+   "word": " to",
+   "start": 48.02,
+   "end": 51.0,
+   "isolated_start": false
+  },
+  {
+   "word": " me",
+   "start": 51.0,
+   "end": 51.58,
+   "isolated_start": false
+  },
+  {
+   "word": " And",
+   "start": 53.7,
+   "end": 54.38,
+   "isolated_start": true
+  },
+  {
+   "word": " you",
+   "start": 54.38,
+   "end": 54.62,
+   "isolated_start": false
+  },
+  {
+   "word": " give",
+   "start": 54.62,
+   "end": 54.9,
+   "isolated_start": false
+  },
+  {
+   "word": " me",
+   "start": 54.9,
+   "end": 55.18,
+   "isolated_start": false
+  },
+  {
+   "word": " all",
+   "start": 55.18,
+   "end": 55.52,
+   "isolated_start": false
+  },
+  {
+   "word": " of",
+   "start": 55.52,
+   "end": 57.26,
+   "isolated_start": false
+  },
+  {
+   "word": " you",
+   "start": 57.26,
+   "end": 59.26,
+   "isolated_start": false
+  }
+ ],
+ "total": 61.0466875
+}

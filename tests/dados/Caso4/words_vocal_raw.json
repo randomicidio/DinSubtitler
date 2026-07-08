@@ -1,0 +1,557 @@
+{
+ "words": [
+  {
+   "word": " Hey",
+   "start": 0.0,
+   "end": 0.32,
+   "isolated_start": false
+  },
+  {
+   "word": " kids,",
+   "start": 0.32,
+   "end": 1.08,
+   "isolated_start": false
+  },
+  {
+   "word": " plunk",
+   "start": 1.36,
+   "end": 2.18,
+   "isolated_start": false
+  },
+  {
+   "word": " into",
+   "start": 2.18,
+   "end": 2.52,
+   "isolated_start": false
+  },
+  {
+   "word": " the",
+   "start": 2.52,
+   "end": 2.86,
+   "isolated_start": false
+  },
+  {
+   "word": " fetus",
+   "start": 2.86,
+   "end": 3.34,
+   "isolated_start": false
+  },
+  {
+   "word": " Maybe",
+   "start": 3.34,
+   "end": 4.08,
+   "isolated_start": false
+  },
+  {
+   "word": " they're",
+   "start": 4.08,
+   "end": 4.4,
+   "isolated_start": false
+  },
+  {
+   "word": " blind,",
+   "start": 4.4,
+   "end": 4.66,
+   "isolated_start": false
+  },
+  {
+   "word": " but",
+   "start": 5.2,
+   "end": 5.66,
+   "isolated_start": true
+  },
+  {
+   "word": " then",
+   "start": 5.66,
+   "end": 5.92,
+   "isolated_start": false
+  },
+  {
+   "word": " it",
+   "start": 5.92,
+   "end": 6.14,
+   "isolated_start": false
+  },
+  {
+   "word": " makes",
+   "start": 6.14,
+   "end": 6.42,
+   "isolated_start": false
+  },
+  {
+   "word": " them",
+   "start": 6.42,
+   "end": 6.62,
+   "isolated_start": false
+  },
+  {
+   "word": " ageless",
+   "start": 6.62,
+   "end": 7.32,
+   "isolated_start": false
+  },
+  {
+   "word": " Michelle",
+   "start": 7.32,
+   "end": 8.18,
+   "isolated_start": false
+  },
+  {
+   "word": " said,",
+   "start": 8.18,
+   "end": 8.94,
+   "isolated_start": false
+  },
+  {
+   "word": " fine,",
+   "start": 9.02,
+   "end": 9.38,
+   "isolated_start": false
+  },
+  {
+   "word": " let's",
+   "start": 9.46,
+   "end": 9.8,
+   "isolated_start": false
+  },
+  {
+   "word": " take",
+   "start": 9.8,
+   "end": 10.14,
+   "isolated_start": false
+  },
+  {
+   "word": " herself",
+   "start": 10.14,
+   "end": 10.6,
+   "isolated_start": false
+  },
+  {
+   "word": " alone",
+   "start": 10.6,
+   "end": 11.08,
+   "isolated_start": false
+  },
+  {
+   "word": " Well,",
+   "start": 13.559999999999999,
+   "end": 14.2,
+   "isolated_start": true
+  },
+  {
+   "word": " we'll",
+   "start": 14.22,
+   "end": 14.44,
+   "isolated_start": false
+  },
+  {
+   "word": " find",
+   "start": 14.44,
+   "end": 14.6,
+   "isolated_start": false
+  },
+  {
+   "word": " a",
+   "start": 14.6,
+   "end": 14.82,
+   "isolated_start": false
+  },
+  {
+   "word": " pilot",
+   "start": 14.82,
+   "end": 15.16,
+   "isolated_start": false
+  },
+  {
+   "word": " out",
+   "start": 15.16,
+   "end": 15.5,
+   "isolated_start": false
+  },
+  {
+   "word": " in",
+   "start": 15.5,
+   "end": 15.7,
+   "isolated_start": false
+  },
+  {
+   "word": " the",
+   "start": 15.7,
+   "end": 15.82,
+   "isolated_start": false
+  },
+  {
+   "word": " streets",
+   "start": 15.82,
+   "end": 16.28,
+   "isolated_start": false
+  },
+  {
+   "word": " To",
+   "start": 16.28,
+   "end": 16.48,
+   "isolated_start": false
+  },
+  {
+   "word": " find",
+   "start": 16.48,
+   "end": 16.88,
+   "isolated_start": false
+  },
+  {
+   "word": " a",
+   "start": 16.88,
+   "end": 17.02,
+   "isolated_start": false
+  },
+  {
+   "word": " ride",
+   "start": 17.02,
+   "end": 17.24,
+   "isolated_start": false
+  },
+  {
+   "word": " in",
+   "start": 17.24,
+   "end": 17.52,
+   "isolated_start": false
+  },
+  {
+   "word": " his",
+   "start": 17.52,
+   "end": 17.7,
+   "isolated_start": false
+  },
+  {
+   "word": " car",
+   "start": 17.7,
+   "end": 18.12,
+   "isolated_start": false
+  },
+  {
+   "word": " Said,",
+   "start": 20.38,
+   "end": 21.02,
+   "isolated_start": true
+  },
+  {
+   "word": " can",
+   "start": 21.02,
+   "end": 21.46,
+   "isolated_start": false
+  },
+  {
+   "word": " you",
+   "start": 21.46,
+   "end": 21.78,
+   "isolated_start": false
+  },
+  {
+   "word": " not",
+   "start": 21.78,
+   "end": 22.0,
+   "isolated_start": false
+  },
+  {
+   "word": " know",
+   "start": 22.0,
+   "end": 22.28,
+   "isolated_start": false
+  },
+  {
+   "word": " I",
+   "start": 22.28,
+   "end": 22.56,
+   "isolated_start": false
+  },
+  {
+   "word": " didn't",
+   "start": 22.56,
+   "end": 22.78,
+   "isolated_start": false
+  },
+  {
+   "word": " have",
+   "start": 22.78,
+   "end": 23.02,
+   "isolated_start": false
+  },
+  {
+   "word": " a",
+   "start": 23.02,
+   "end": 23.1,
+   "isolated_start": false
+  },
+  {
+   "word": " senior",
+   "start": 23.1,
+   "end": 23.44,
+   "isolated_start": false
+  },
+  {
+   "word": " yet",
+   "start": 23.44,
+   "end": 24.04,
+   "isolated_start": false
+  },
+  {
+   "word": " Oh,",
+   "start": 24.04,
+   "end": 25.02,
+   "isolated_start": false
+  },
+  {
+   "word": " but",
+   "start": 25.02,
+   "end": 25.28,
+   "isolated_start": false
+  },
+  {
+   "word": " it's",
+   "start": 25.28,
+   "end": 25.52,
+   "isolated_start": false
+  },
+  {
+   "word": " so",
+   "start": 25.52,
+   "end": 25.62,
+   "isolated_start": false
+  },
+  {
+   "word": " spaced",
+   "start": 25.62,
+   "end": 26.06,
+   "isolated_start": false
+  },
+  {
+   "word": " out",
+   "start": 26.06,
+   "end": 26.82,
+   "isolated_start": false
+  },
+  {
+   "word": " Benny",
+   "start": 27.94,
+   "end": 28.66,
+   "isolated_start": true
+  },
+  {
+   "word": " and",
+   "start": 28.66,
+   "end": 28.9,
+   "isolated_start": false
+  },
+  {
+   "word": " the",
+   "start": 28.9,
+   "end": 29.22,
+   "isolated_start": false
+  },
+  {
+   "word": " Jazz",
+   "start": 29.22,
+   "end": 29.6,
+   "isolated_start": false
+  },
+  {
+   "word": " Oh,",
+   "start": 31.060000000000002,
+   "end": 31.78,
+   "isolated_start": true
+  },
+  {
+   "word": " but",
+   "start": 32.0,
+   "end": 32.22,
+   "isolated_start": false
+  },
+  {
+   "word": " the",
+   "start": 32.22,
+   "end": 32.36,
+   "isolated_start": false
+  },
+  {
+   "word": " real",
+   "start": 32.36,
+   "end": 32.72,
+   "isolated_start": false
+  },
+  {
+   "word": " and",
+   "start": 32.72,
+   "end": 33.2,
+   "isolated_start": false
+  },
+  {
+   "word": " the",
+   "start": 33.2,
+   "end": 33.34,
+   "isolated_start": false
+  },
+  {
+   "word": " wonderful",
+   "start": 33.34,
+   "end": 33.78,
+   "isolated_start": false
+  },
+  {
+   "word": " Oh,",
+   "start": 33.78,
+   "end": 34.94,
+   "isolated_start": false
+  },
+  {
+   "word": " Benny,",
+   "start": 34.94,
+   "end": 35.48,
+   "isolated_start": false
+  },
+  {
+   "word": " she's",
+   "start": 35.48,
+   "end": 36.0,
+   "isolated_start": false
+  },
+  {
+   "word": " sweet",
+   "start": 36.0,
+   "end": 36.38,
+   "isolated_start": false
+  },
+  {
+   "word": " again",
+   "start": 36.38,
+   "end": 36.7,
+   "isolated_start": false
+  },
+  {
+   "word": " She's",
+   "start": 37.6,
+   "end": 38.32,
+   "isolated_start": true
+  },
+  {
+   "word": " got",
+   "start": 38.32,
+   "end": 38.52,
+   "isolated_start": false
+  },
+  {
+   "word": " electric",
+   "start": 38.52,
+   "end": 38.86,
+   "isolated_start": false
+  },
+  {
+   "word": " boots",
+   "start": 38.86,
+   "end": 39.5,
+   "isolated_start": false
+  },
+  {
+   "word": " A",
+   "start": 39.5,
+   "end": 40.3,
+   "isolated_start": false
+  },
+  {
+   "word": " more",
+   "start": 40.3,
+   "end": 40.64,
+   "isolated_start": false
+  },
+  {
+   "word": " suit",
+   "start": 40.64,
+   "end": 41.0,
+   "isolated_start": false
+  },
+  {
+   "word": " than",
+   "start": 41.0,
+   "end": 41.68,
+   "isolated_start": false
+  },
+  {
+   "word": " all",
+   "start": 41.68,
+   "end": 41.94,
+   "isolated_start": false
+  },
+  {
+   "word": " the",
+   "start": 41.94,
+   "end": 42.12,
+   "isolated_start": false
+  },
+  {
+   "word": " ride",
+   "start": 42.12,
+   "end": 42.44,
+   "isolated_start": false
+  },
+  {
+   "word": "-a",
+   "start": 42.44,
+   "end": 42.6,
+   "isolated_start": false
+  },
+  {
+   "word": "-lady",
+   "start": 42.6,
+   "end": 42.84,
+   "isolated_start": false
+  },
+  {
+   "word": " magazines",
+   "start": 42.84,
+   "end": 43.4,
+   "isolated_start": false
+  },
+  {
+   "word": " Oh,",
+   "start": 46.7,
+   "end": 47.42,
+   "isolated_start": true
+  },
+  {
+   "word": " Benny",
+   "start": 47.42,
+   "end": 48.14,
+   "isolated_start": false
+  },
+  {
+   "word": " and",
+   "start": 48.14,
+   "end": 48.72,
+   "isolated_start": false
+  },
+  {
+   "word": " the",
+   "start": 48.72,
+   "end": 48.94,
+   "isolated_start": false
+  },
+  {
+   "word": " Jazz",
+   "start": 48.94,
+   "end": 49.3,
+   "isolated_start": false
+  },
+  {
+   "word": " Thank",
+   "start": 59.28,
+   "end": 60.68,
+   "isolated_start": true
+  },
+  {
+   "word": " you.",
+   "start": 60.68,
+   "end": 60.68,
+   "isolated_start": false
+  }
+ ],
+ "total": 60.7146875
+}

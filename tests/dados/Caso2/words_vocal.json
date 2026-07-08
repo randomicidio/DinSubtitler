@@ -1,0 +1,923 @@
+{
+ "words": [
+  {
+   "word": " Welcome",
+   "start": 0.27,
+   "end": 0.97,
+   "isolated_start": false
+  },
+  {
+   "word": " to",
+   "start": 0.97,
+   "end": 1.39,
+   "isolated_start": false
+  },
+  {
+   "word": " the",
+   "start": 1.39,
+   "end": 1.87,
+   "isolated_start": false
+  },
+  {
+   "word": " planet,",
+   "start": 1.87,
+   "end": 2.61,
+   "isolated_start": false
+  },
+  {
+   "word": " welcome",
+   "start": 3.29,
+   "end": 4.55,
+   "isolated_start": true
+  },
+  {
+   "word": " to",
+   "start": 7.85,
+   "end": 8.33,
+   "isolated_start": true
+  },
+  {
+   "word": " existence,",
+   "start": 8.33,
+   "end": 9.59,
+   "isolated_start": false
+  },
+  {
+   "word": " everyone's",
+   "start": 12.99,
+   "end": 15.69,
+   "isolated_start": true
+  },
+  {
+   "word": " here,",
+   "start": 15.69,
+   "end": 16.11,
+   "isolated_start": false
+  },
+  {
+   "word": " everyone's",
+   "start": 16.81,
+   "end": 19.09,
+   "isolated_start": true
+  },
+  {
+   "word": " here,",
+   "start": 19.09,
+   "end": 19.43,
+   "isolated_start": false
+  },
+  {
+   "word": " everybody's",
+   "start": 19.87,
+   "end": 22.49,
+   "isolated_start": false
+  },
+  {
+   "word": " watching",
+   "start": 22.49,
+   "end": 23.31,
+   "isolated_start": false
+  },
+  {
+   "word": " you",
+   "start": 23.31,
+   "end": 24.51,
+   "isolated_start": false
+  },
+  {
+   "word": " now,",
+   "start": 24.51,
+   "end": 25.51,
+   "isolated_start": false
+  },
+  {
+   "word": " everybody",
+   "start": 25.85,
+   "end": 28.71,
+   "isolated_start": false
+  },
+  {
+   "word": " waits",
+   "start": 28.71,
+   "end": 29.61,
+   "isolated_start": false
+  },
+  {
+   "word": " for",
+   "start": 29.61,
+   "end": 30.41,
+   "isolated_start": false
+  },
+  {
+   "word": " you",
+   "start": 30.41,
+   "end": 31.37,
+   "isolated_start": false
+  },
+  {
+   "word": " now.",
+   "start": 31.37,
+   "end": 32.03,
+   "isolated_start": false
+  },
+  {
+   "word": " What",
+   "start": 32.03,
+   "end": 33.69,
+   "isolated_start": false
+  },
+  {
+   "word": " happens",
+   "start": 35.1,
+   "end": 36.02,
+   "isolated_start": true
+  },
+  {
+   "word": " next,",
+   "start": 36.02,
+   "end": 36.74,
+   "isolated_start": false
+  },
+  {
+   "word": " what",
+   "start": 37.06,
+   "end": 38.56,
+   "isolated_start": false
+  },
+  {
+   "word": " happens",
+   "start": 38.56,
+   "end": 39.42,
+   "isolated_start": false
+  },
+  {
+   "word": " next",
+   "start": 39.42,
+   "end": 40.28,
+   "isolated_start": false
+  },
+  {
+   "word": " I",
+   "start": 41.16,
+   "end": 41.64,
+   "isolated_start": true
+  },
+  {
+   "word": " tell",
+   "start": 41.64,
+   "end": 42.08,
+   "isolated_start": false
+  },
+  {
+   "word": " you",
+   "start": 42.08,
+   "end": 42.5,
+   "isolated_start": false
+  },
+  {
+   "word": " to",
+   "start": 42.5,
+   "end": 42.84,
+   "isolated_start": false
+  },
+  {
+   "word": " move,",
+   "start": 42.84,
+   "end": 43.2,
+   "isolated_start": false
+  },
+  {
+   "word": " tell",
+   "start": 45.05,
+   "end": 45.53,
+   "isolated_start": true
+  },
+  {
+   "word": " you",
+   "start": 45.53,
+   "end": 45.97,
+   "isolated_start": false
+  },
+  {
+   "word": " to",
+   "start": 45.97,
+   "end": 46.33,
+   "isolated_start": false
+  },
+  {
+   "word": " move",
+   "start": 46.33,
+   "end": 46.73,
+   "isolated_start": false
+  },
+  {
+   "word": " Tell",
+   "start": 48.33,
+   "end": 48.95,
+   "isolated_start": true
+  },
+  {
+   "word": " you",
+   "start": 48.95,
+   "end": 49.37,
+   "isolated_start": false
+  },
+  {
+   "word": " to",
+   "start": 49.37,
+   "end": 49.79,
+   "isolated_start": false
+  },
+  {
+   "word": " leave",
+   "start": 49.79,
+   "end": 50.29,
+   "isolated_start": false
+  },
+  {
+   "word": " yourself",
+   "start": 50.29,
+   "end": 51.33,
+   "isolated_start": false
+  },
+  {
+   "word": " up",
+   "start": 51.33,
+   "end": 52.27,
+   "isolated_start": false
+  },
+  {
+   "word": " on",
+   "start": 52.27,
+   "end": 52.83,
+   "isolated_start": false
+  },
+  {
+   "word": " the",
+   "start": 52.83,
+   "end": 53.17,
+   "isolated_start": false
+  },
+  {
+   "word": " floor",
+   "start": 53.17,
+   "end": 53.87,
+   "isolated_start": false
+  },
+  {
+   "word": " I",
+   "start": 54.45,
+   "end": 55.19,
+   "isolated_start": true
+  },
+  {
+   "word": " tell",
+   "start": 55.19,
+   "end": 55.87,
+   "isolated_start": false
+  },
+  {
+   "word": " you",
+   "start": 55.87,
+   "end": 56.19,
+   "isolated_start": false
+  },
+  {
+   "word": " to",
+   "start": 56.19,
+   "end": 56.51,
+   "isolated_start": false
+  },
+  {
+   "word": " move,",
+   "start": 56.51,
+   "end": 56.81,
+   "isolated_start": false
+  },
+  {
+   "word": " tell",
+   "start": 58.77,
+   "end": 59.19,
+   "isolated_start": true
+  },
+  {
+   "word": " you",
+   "start": 59.19,
+   "end": 59.65,
+   "isolated_start": false
+  },
+  {
+   "word": " to",
+   "start": 59.65,
+   "end": 60.01,
+   "isolated_start": false
+  },
+  {
+   "word": " move",
+   "start": 60.01,
+   "end": 60.37,
+   "isolated_start": false
+  },
+  {
+   "word": " Like",
+   "start": 61.05,
+   "end": 61.81,
+   "isolated_start": true
+  },
+  {
+   "word": " today",
+   "start": 61.81,
+   "end": 62.29,
+   "isolated_start": false
+  },
+  {
+   "word": " never",
+   "start": 62.29,
+   "end": 63.41,
+   "isolated_start": false
+  },
+  {
+   "word": " happened",
+   "start": 63.41,
+   "end": 64.19,
+   "isolated_start": false
+  },
+  {
+   "word": " before",
+   "start": 68.06,
+   "end": 68.98,
+   "isolated_start": true
+  },
+  {
+   "word": " Welcome",
+   "start": 80.7,
+   "end": 81.52,
+   "isolated_start": true
+  },
+  {
+   "word": " to",
+   "start": 81.52,
+   "end": 81.82,
+   "isolated_start": false
+  },
+  {
+   "word": " the",
+   "start": 81.82,
+   "end": 82.06,
+   "isolated_start": false
+  },
+  {
+   "word": " fallout",
+   "start": 82.06,
+   "end": 82.82,
+   "isolated_start": false
+  },
+  {
+   "word": " Welcome",
+   "start": 82.82,
+   "end": 84.44,
+   "isolated_start": false
+  },
+  {
+   "word": " to",
+   "start": 88.44,
+   "end": 88.86,
+   "isolated_start": true
+  },
+  {
+   "word": " resistance",
+   "start": 88.86,
+   "end": 89.96,
+   "isolated_start": false
+  },
+  {
+   "word": " The",
+   "start": 91.12,
+   "end": 92.14,
+   "isolated_start": true
+  },
+  {
+   "word": " tension",
+   "start": 94.96,
+   "end": 95.38,
+   "isolated_start": true
+  },
+  {
+   "word": " is",
+   "start": 95.38,
+   "end": 96.04,
+   "isolated_start": false
+  },
+  {
+   "word": " here",
+   "start": 96.04,
+   "end": 96.68,
+   "isolated_start": false
+  },
+  {
+   "word": " The",
+   "start": 97.49,
+   "end": 98.0,
+   "isolated_start": true
+  },
+  {
+   "word": " tension",
+   "start": 98.0,
+   "end": 98.84,
+   "isolated_start": false
+  },
+  {
+   "word": " is",
+   "start": 98.84,
+   "end": 99.54,
+   "isolated_start": false
+  },
+  {
+   "word": " here",
+   "start": 99.54,
+   "end": 100.2,
+   "isolated_start": false
+  },
+  {
+   "word": " Between",
+   "start": 101.08,
+   "end": 102.08,
+   "isolated_start": true
+  },
+  {
+   "word": " whom",
+   "start": 102.08,
+   "end": 102.74,
+   "isolated_start": false
+  },
+  {
+   "word": " you",
+   "start": 102.74,
+   "end": 103.06,
+   "isolated_start": false
+  },
+  {
+   "word": " are",
+   "start": 103.06,
+   "end": 103.52,
+   "isolated_start": false
+  },
+  {
+   "word": " and",
+   "start": 103.52,
+   "end": 104.12,
+   "isolated_start": false
+  },
+  {
+   "word": " who",
+   "start": 104.12,
+   "end": 104.4,
+   "isolated_start": false
+  },
+  {
+   "word": " you",
+   "start": 104.4,
+   "end": 104.72,
+   "isolated_start": false
+  },
+  {
+   "word": " could",
+   "start": 104.72,
+   "end": 105.1,
+   "isolated_start": false
+  },
+  {
+   "word": " be",
+   "start": 105.1,
+   "end": 105.62,
+   "isolated_start": false
+  },
+  {
+   "word": " Between",
+   "start": 107.96,
+   "end": 108.98,
+   "isolated_start": true
+  },
+  {
+   "word": " how",
+   "start": 108.98,
+   "end": 109.56,
+   "isolated_start": false
+  },
+  {
+   "word": " it",
+   "start": 109.56,
+   "end": 109.96,
+   "isolated_start": false
+  },
+  {
+   "word": " is",
+   "start": 109.96,
+   "end": 110.4,
+   "isolated_start": false
+  },
+  {
+   "word": " and",
+   "start": 110.4,
+   "end": 110.94,
+   "isolated_start": false
+  },
+  {
+   "word": " how",
+   "start": 110.94,
+   "end": 111.22,
+   "isolated_start": false
+  },
+  {
+   "word": " it",
+   "start": 111.22,
+   "end": 111.54,
+   "isolated_start": false
+  },
+  {
+   "word": " should",
+   "start": 111.54,
+   "end": 111.92,
+   "isolated_start": false
+  },
+  {
+   "word": " be",
+   "start": 111.92,
+   "end": 112.4,
+   "isolated_start": false
+  },
+  {
+   "word": " Yeah",
+   "start": 112.4,
+   "end": 113.32,
+   "isolated_start": false
+  },
+  {
+   "word": " I",
+   "start": 113.32,
+   "end": 115.06,
+   "isolated_start": false
+  },
+  {
+   "word": " tell",
+   "start": 115.06,
+   "end": 115.84,
+   "isolated_start": false
+  },
+  {
+   "word": " you",
+   "start": 115.84,
+   "end": 116.36,
+   "isolated_start": false
+  },
+  {
+   "word": " to",
+   "start": 116.36,
+   "end": 116.6,
+   "isolated_start": false
+  },
+  {
+   "word": " move",
+   "start": 116.6,
+   "end": 116.94,
+   "isolated_start": false
+  },
+  {
+   "word": " I",
+   "start": 116.94,
+   "end": 117.18,
+   "isolated_start": false
+  },
+  {
+   "word": " tell",
+   "start": 118.84,
+   "end": 119.34,
+   "isolated_start": true
+  },
+  {
+   "word": " you",
+   "start": 119.34,
+   "end": 119.68,
+   "isolated_start": false
+  },
+  {
+   "word": " to",
+   "start": 119.68,
+   "end": 119.96,
+   "isolated_start": false
+  },
+  {
+   "word": " move",
+   "start": 119.96,
+   "end": 120.32,
+   "isolated_start": false
+  },
+  {
+   "word": " Dare",
+   "start": 122.02,
+   "end": 122.62,
+   "isolated_start": true
+  },
+  {
+   "word": " you",
+   "start": 122.62,
+   "end": 123.24,
+   "isolated_start": false
+  },
+  {
+   "word": " to",
+   "start": 123.24,
+   "end": 123.46,
+   "isolated_start": false
+  },
+  {
+   "word": " lift",
+   "start": 123.46,
+   "end": 124.02,
+   "isolated_start": false
+  },
+  {
+   "word": " yourself",
+   "start": 124.02,
+   "end": 125.12,
+   "isolated_start": false
+  },
+  {
+   "word": " up",
+   "start": 125.12,
+   "end": 126.02,
+   "isolated_start": false
+  },
+  {
+   "word": " from",
+   "start": 126.02,
+   "end": 126.58,
+   "isolated_start": false
+  },
+  {
+   "word": " the",
+   "start": 126.58,
+   "end": 127.0,
+   "isolated_start": false
+  },
+  {
+   "word": " floor",
+   "start": 127.0,
+   "end": 127.72,
+   "isolated_start": false
+  },
+  {
+   "word": " Dare",
+   "start": 128.7,
+   "end": 129.6,
+   "isolated_start": true
+  },
+  {
+   "word": " you",
+   "start": 129.6,
+   "end": 130.04,
+   "isolated_start": false
+  },
+  {
+   "word": " to",
+   "start": 130.04,
+   "end": 130.24,
+   "isolated_start": false
+  },
+  {
+   "word": " move",
+   "start": 130.24,
+   "end": 130.64,
+   "isolated_start": false
+  },
+  {
+   "word": " Like",
+   "start": 132.08,
+   "end": 132.96,
+   "isolated_start": true
+  },
+  {
+   "word": " today",
+   "start": 134.91,
+   "end": 136.03,
+   "isolated_start": true
+  },
+  {
+   "word": " never",
+   "start": 136.03,
+   "end": 137.19,
+   "isolated_start": false
+  },
+  {
+   "word": " happened",
+   "start": 137.19,
+   "end": 138.41,
+   "isolated_start": false
+  },
+  {
+   "word": " Maybe",
+   "start": 138.41,
+   "end": 139.77,
+   "isolated_start": false
+  },
+  {
+   "word": " redemption",
+   "start": 143.29,
+   "end": 144.65,
+   "isolated_start": true
+  },
+  {
+   "word": " has",
+   "start": 144.65,
+   "end": 145.73,
+   "isolated_start": false
+  },
+  {
+   "word": " stories",
+   "start": 145.73,
+   "end": 146.83,
+   "isolated_start": false
+  },
+  {
+   "word": " to",
+   "start": 146.83,
+   "end": 147.49,
+   "isolated_start": false
+  },
+  {
+   "word": " tell",
+   "start": 147.49,
+   "end": 148.25,
+   "isolated_start": false
+  },
+  {
+   "word": " Maybe",
+   "start": 148.95,
+   "end": 150.19,
+   "isolated_start": true
+  },
+  {
+   "word": " forgiveness",
+   "start": 150.19,
+   "end": 151.35,
+   "isolated_start": false
+  },
+  {
+   "word": " is",
+   "start": 151.35,
+   "end": 152.61,
+   "isolated_start": false
+  },
+  {
+   "word": " right",
+   "start": 152.61,
+   "end": 153.17,
+   "isolated_start": false
+  },
+  {
+   "word": " where",
+   "start": 153.17,
+   "end": 153.91,
+   "isolated_start": false
+  },
+  {
+   "word": " you",
+   "start": 153.91,
+   "end": 154.39,
+   "isolated_start": false
+  },
+  {
+   "word": " fell",
+   "start": 154.39,
+   "end": 154.85,
+   "isolated_start": false
+  },
+  {
+   "word": " Where",
+   "start": 154.85,
+   "end": 156.87,
+   "isolated_start": false
+  },
+  {
+   "word": " can",
+   "start": 156.87,
+   "end": 157.25,
+   "isolated_start": false
+  },
+  {
+   "word": " you",
+   "start": 157.25,
+   "end": 157.81,
+   "isolated_start": false
+  },
+  {
+   "word": " run",
+   "start": 157.81,
+   "end": 158.31,
+   "isolated_start": false
+  },
+  {
+   "word": " to",
+   "start": 158.31,
+   "end": 158.97,
+   "isolated_start": false
+  },
+  {
+   "word": " escape",
+   "start": 158.97,
+   "end": 159.75,
+   "isolated_start": false
+  },
+  {
+   "word": " from",
+   "start": 159.75,
+   "end": 160.79,
+   "isolated_start": false
+  },
+  {
+   "word": " yourself",
+   "start": 160.79,
+   "end": 161.53,
+   "isolated_start": false
+  },
+  {
+   "word": " Where",
+   "start": 162.57,
+   "end": 163.71,
+   "isolated_start": true
+  },
+  {
+   "word": " are",
+   "start": 163.71,
+   "end": 164.03,
+   "isolated_start": false
+  },
+  {
+   "word": " you",
+   "start": 164.03,
+   "end": 164.21,
+   "isolated_start": false
+  },
+  {
+   "word": " gonna",
+   "start": 164.21,
+   "end": 164.47,
+   "isolated_start": false
+  },
+  {
+   "word": " go",
+   "start": 164.47,
+   "end": 164.93,
+   "isolated_start": false
+  },
+  {
+   "word": " Where",
+   "start": 165.55,
+   "end": 166.63,
+   "isolated_start": true
+  },
+  {
+   "word": " are",
+   "start": 166.63,
+   "end": 167.41,
+   "isolated_start": false
+  },
+  {
+   "word": " you",
+   "start": 167.41,
+   "end": 167.59,
+   "isolated_start": false
+  },
+  {
+   "word": " gonna",
+   "start": 167.59,
+   "end": 167.87,
+   "isolated_start": false
+  },
+  {
+   "word": " go",
+   "start": 167.87,
+   "end": 168.27,
+   "isolated_start": false
+  },
+  {
+   "word": " Salvation",
+   "start": 169.63,
+   "end": 170.83,
+   "isolated_start": true
+  },
+  {
+   "word": " is",
+   "start": 170.83,
+   "end": 171.43,
+   "isolated_start": false
+  },
+  {
+   "word": " here",
+   "start": 171.43,
+   "end": 172.03,
+   "isolated_start": false
+  }
+ ],
+ "total": 178.3756875
+}
